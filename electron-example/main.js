@@ -149,15 +149,31 @@ ipcMain.handle('scale:forget', async () => {
 });
 
 /**
- * PERMISSION_DENIED needs a settings change, not a retry. Take the user there.
+ * Two different failures, two different settings pages.
+ *
+ * PERMISSION_DENIED means the app is not allowed to use Bluetooth: that is the
+ * privacy page. BLUETOOTH_UNAVAILABLE means the radio is off or missing: that
+ * is the devices page. Sending someone to the privacy toggle when Bluetooth is
+ * simply switched off is a dead end they cannot escape, which is the whole
+ * reason these are separate error codes.
  */
-ipcMain.handle('scale:openBluetoothSettings', async () => {
-  if (process.platform === 'win32') {
-    await shell.openExternal('ms-settings:privacy-bluetooth');
-  } else if (process.platform === 'darwin') {
-    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth');
-  }
-  return { ok: true };
+const SETTINGS_PAGES = {
+  win32: {
+    PERMISSION_DENIED: 'ms-settings:privacy-bluetooth',
+    BLUETOOTH_UNAVAILABLE: 'ms-settings:bluetooth',
+  },
+  darwin: {
+    PERMISSION_DENIED: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth',
+    BLUETOOTH_UNAVAILABLE: 'x-apple.systempreferences:com.apple.preference.Bluetooth',
+  },
+};
+
+ipcMain.handle('scale:openBluetoothSettings', async (_event, code) => {
+  const pages = SETTINGS_PAGES[process.platform];
+  if (!pages) return { ok: false, code: 'UNSUPPORTED_PLATFORM' };
+  const url = pages[code] || pages.PERMISSION_DENIED;
+  await shell.openExternal(url);
+  return { ok: true, url };
 });
 
 // ------------------------------------------------------------------ lifecycle

@@ -197,6 +197,22 @@ function boot() {
 
 const readConfigFile = () => JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
 
+/*
+ * The service is a real child process holding real pipes, and those pipes keep
+ * this process's event loop alive. The last test takes the app through its quit
+ * path, so a full run ends by itself — but a filtered run (`--test-name-pattern`)
+ * stops wherever the filter stops, and without this the runner would report its
+ * results and then hang for ever with an orphaned scale.js still open.
+ */
+test.after(async () => {
+  if (!(await call('scale:status')).ok) return;      // never started, or already gone
+  const mark = pushed.length;
+  app.isQuiting = false;                             // let main.js's handler run again
+  app.emit('before-quit', { preventDefault() {} });
+  await waitFor(() => pushesSince(mark, 'scale:closed').length > 0,
+    'the scale service to shut down at teardown');
+});
+
 // ============================================================== before boot ==
 
 // The preload is the contract, and it is the half that cannot be typo-checked:
@@ -212,7 +228,7 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
   await bridge.api.cancel();
   await bridge.api.status();
   await bridge.api.forget();
-  await bridge.api.openBluetoothSettings();
+  await bridge.api.openBluetoothSettings('PERMISSION_DENIED');
 
   const asked = invokes.slice(mark).map((i) => i.channel);
   assert.deepStrictEqual(asked, INVOKE_CHANNELS,
@@ -224,11 +240,21 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
   assert.strictEqual(measured.args.length, 1, 'measure carries one argument');
   assert.deepStrictEqual(measured.args[0], profile,
     'the profile crosses the bridge unchanged; nothing is added to it');
+  // Only `measure` may carry anything about the person. Everything else may
+  // carry operational arguments — openBluetoothSettings takes an error code —
+  // but nothing that identifies or describes whoever is on the scale.
+  const PERSONAL = ['age', 'heightCm', 'sex', 'weight', 'name', 'email'];
   for (const i of invokes.slice(mark)) {
-    if (i.channel !== 'scale:measure') {
-      assert.deepStrictEqual(i.args, [], `${i.channel} sends nothing about the person`);
+    if (i.channel === 'scale:measure') continue;
+    const payload = JSON.stringify(i.args === undefined ? null : i.args);
+    for (const field of PERSONAL) {
+      assert.ok(!payload.includes(field), `${i.channel} sends nothing about the person, saw ${payload}`);
     }
   }
+
+  const settings = invokes.slice(mark).find((i) => i.channel === 'scale:openBluetoothSettings');
+  assert.deepStrictEqual(settings.args, ['PERMISSION_DENIED'],
+    'the settings channel carries only the error code, so it can open the page that fixes it');
 });
 
 // contextBridge is the entire security boundary. Anything extra on `window.scale`
@@ -603,32 +629,49 @@ test('INT-ELEC-18  nothing is pushed at a destroyed window, and the reply still 
     'and pushing resumes once a live window is back');
 });
 
-// PERMISSION_DENIED cannot be retried away: on Windows the app must be ticked in
-// the Bluetooth privacy list, on macOS in Privacy & Security. A button that
-// opens the wrong page, or the Windows page on a Mac, leaves the user with an
-// app that will never work and no way to find out why.
-test('INT-ELEC-19  openBluetoothSettings opens the right page for each platform', async () => {
+// Neither of these can be retried away, and they need OPPOSITE pages: a refused
+// permission is fixed in the privacy list, a switched-off radio in the devices
+// panel. Sending someone to the privacy toggle when Bluetooth is simply off is
+// a dead end they cannot escape, which is why these are separate error codes in
+// the first place. Opening the Windows page on a Mac is the same failure again.
+test('INT-ELEC-19  each failure opens the settings page that can actually fix it', async () => {
   await boot();
   const mark = openedUrls.length;
+  const last = () => openedUrls[openedUrls.length - 1];
 
-  const win = await asPlatform('win32', () => call('scale:openBluetoothSettings'));
-  assert.deepStrictEqual(win, { ok: true });
-  assert.strictEqual(openedUrls[openedUrls.length - 1], 'ms-settings:privacy-bluetooth');
+  const winPerm = await asPlatform('win32', () => call('scale:openBluetoothSettings', 'PERMISSION_DENIED'));
+  assert.strictEqual(winPerm.ok, true);
+  assert.strictEqual(last(), 'ms-settings:privacy-bluetooth', 'the privacy list');
 
-  const mac = await asPlatform('darwin', () => call('scale:openBluetoothSettings'));
-  assert.deepStrictEqual(mac, { ok: true });
-  assert.strictEqual(openedUrls[openedUrls.length - 1],
-    'x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth');
+  const winRadio = await asPlatform('win32', () => call('scale:openBluetoothSettings', 'BLUETOOTH_UNAVAILABLE'));
+  assert.strictEqual(winRadio.ok, true);
+  assert.strictEqual(last(), 'ms-settings:bluetooth', 'the devices panel, not the privacy list');
+  assert.notStrictEqual(winRadio.url, winPerm.url, 'the two codes go to different pages');
 
-  assert.strictEqual(openedUrls.length - mark, 2, 'exactly one page per call');
+  const macPerm = await asPlatform('darwin', () => call('scale:openBluetoothSettings', 'PERMISSION_DENIED'));
+  assert.strictEqual(macPerm.ok, true);
+  assert.match(last(), /^x-apple\.systempreferences:/, 'a macOS settings URI, never the Windows one');
+  assert.match(last(), /Privacy_Bluetooth/);
 
-  // Neither of the two supported desktops is Linux, and the handler opens
-  // nothing there. It still answers, so the UI does not hang on the click.
-  // KNOWN DISCREPANCY: it answers { ok: true } for a no-op, so the button
-  // reports success on Linux without opening anything. Pinned, not fixed.
-  const other = await asPlatform('linux', () => call('scale:openBluetoothSettings'));
-  assert.deepStrictEqual(other, { ok: true });
-  assert.strictEqual(openedUrls.length - mark, 2, 'and nothing was opened on an unsupported platform');
+  const macRadio = await asPlatform('darwin', () => call('scale:openBluetoothSettings', 'BLUETOOTH_UNAVAILABLE'));
+  assert.strictEqual(macRadio.ok, true);
+  assert.notStrictEqual(macRadio.url, macPerm.url);
+
+  // An unknown or missing code still has to open something useful rather than
+  // leaving the button dead.
+  const noCode = await asPlatform('win32', () => call('scale:openBluetoothSettings'));
+  assert.strictEqual(noCode.ok, true);
+  assert.strictEqual(last(), 'ms-settings:privacy-bluetooth', 'it falls back to the commoner cause');
+
+  assert.strictEqual(openedUrls.length - mark, 5, 'exactly one page per call');
+
+  // Linux is not a supported desktop here. The handler must say so rather than
+  // reporting success for a no-op, which would leave the UI claiming it opened
+  // a settings page that never appeared.
+  const other = await asPlatform('linux', () => call('scale:openBluetoothSettings', 'PERMISSION_DENIED'));
+  assert.strictEqual(other.ok, false, 'an unsupported platform reports failure, not a silent no-op');
+  assert.strictEqual(other.code, 'UNSUPPORTED_PLATFORM');
+  assert.strictEqual(openedUrls.length - mark, 5, 'and nothing was opened');
 });
 
 // Closing the last window on Windows must end the process. If it did not, the
@@ -773,8 +816,11 @@ test('INT-ELEC-25  once the service is stopped, commands fail cleanly and nothin
   // on its own, take it there now, so this can never pass vacuously against a
   // service that is in fact still running.
   if ((await call('scale:status')).ok) {
+    const mark = pushed.length;
     app.emit('before-quit', { preventDefault() {} });
-    await waitFor(async () => !(await call('scale:status')).ok, 'the service to stop');
+    // Wait for the close to be announced, not merely for `running` to go false:
+    // stop() retires the child synchronously, long before it has actually gone.
+    await waitFor(() => pushesSince(mark, 'scale:closed').length > 0, 'the service to close');
   }
   const closedBefore = pushed.filter((p) => p.channel === 'scale:closed').length;
   assert.ok(closedBefore > 0, 'the service really was stopped by the quit path');

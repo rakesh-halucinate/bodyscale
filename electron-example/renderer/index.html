@@ -167,12 +167,16 @@ function showError(r) {
     DEVICE_NOT_FOUND: 'The scale did not answer. Its radio sleeps when idle, so step on it and press Measure again.',
     NO_READING:       'Connected, but no stable reading. Stand still and try again.',
     PERMISSION_DENIED:'This app is not allowed to use Bluetooth.',
+    BLUETOOTH_UNAVAILABLE:'Bluetooth is switched off, or there is no adapter.',
     TRANSPORT_FAILED: 'The Bluetooth helper could not start. Check the setup step.',
     CANCELLED:        'Cancelled.',
     INVALID_PROFILE:  r.message,
   };
   $('phase').textContent = friendly[r.code] || (r.code + ': ' + r.message);
-  if (r.code === 'PERMISSION_DENIED') window.scale.openBluetoothSettings();
+  // Each of these needs a different settings page; the code decides which.
+  if (r.code === 'PERMISSION_DENIED' || r.code === 'BLUETOOTH_UNAVAILABLE') {
+    window.scale.openBluetoothSettings(r.code);
+  }
 }
 
 // --------------------------------------------------------------- rendering

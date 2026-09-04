@@ -390,8 +390,17 @@ group more quietly than the first.
 
 | Impedance | `measured.impedanceOhm` | `derived` keys | `trust.impedanceDerived` |
 |---|---|---|---|
-| present and accepted | a number | **24** | `true` |
-| absent, or rejected by the checks | `null`, or the rejected number | **9** | `false` |
+| present, and it passed the checks | a number | **24** | `true` |
+| present, but it failed the checks | the rejected number | **24** | `false` |
+| absent | `null` | **9** | `false` |
+
+**The key count and the trust flag are independent signals. Do not infer one
+from the other.** A rejected impedance still produces all twenty-four values —
+they are simply not to be believed. Only a *missing* impedance shrinks the set.
+
+A host that treats "few keys" as "untrustworthy" will display a rejected body
+fat of 62.3% as though it were a measurement. Branch on `trust.impedanceDerived`
+for believability, and key-check for presence. They answer different questions.
 
 **Never assume a key exists.** These nine are always present:
 
@@ -402,11 +411,17 @@ idealWeightRangeKg  bodyFatRecommendedKey
 ```
 
 The other fifteen — body fat, fat mass, water, muscle, skeletal muscle, bone,
-protein and the FFMI — appear only when impedance survived its checks.
+protein and the FFMI — appear whenever an impedance value arrived at all, pass
+or fail. When it failed, they are present and wrong, and `trust.impedanceDerived`
+is the only thing that says so.
 
-This is not an error path. A user in socks, or with dry skin, produces it
-routinely. It is exactly what happened on the reference device: an impedance of
-3115.6 Ω was rejected, and `derived` came back with nine keys.
+Neither shape is an error path. A user in socks or with dry skin routinely
+produces one or the other: the scale may send a wild impedance, or none at all.
+
+On the reference device both were seen minutes apart. An impedance of 3115.6 Ω
+arrived and was rejected — twenty-four keys, `trust.impedanceDerived` false,
+`bodyFatRecommended` switched to the BMI anchor. A later attempt sent no
+impedance at all — nine keys, `measured.impedanceOhm` null.
 
 ### Which body fat to display
 

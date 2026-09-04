@@ -606,3 +606,36 @@ test('INT-TRUST-23  trust.impedanceFree depends only on weight, height and age, 
   });
   assert.ok(ok > 500 && notOk > 500, `ok ${ok}, notOk ${notOk}`);
 });
+
+// Prevents: the most dangerous confusion in this payload — a host treating a
+// short `derived` as "untrustworthy" and a full one as "fine". A REJECTED
+// impedance still yields all twenty-four values; they are simply wrong. Only an
+// ABSENT impedance shrinks the set. A UI that conflates the two will present a
+// rejected body fat of 62.3% as a measurement.
+test('INT-TRUST-24  key count signals presence, trust signals believability, and they are independent', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+  // One coherent body throughout, so only the impedance varies between cases.
+  const count = (z) => {
+    const r = BIA.estimate({ weightKg: 75, impedanceOhm: z, heightCm: 180, age: 39, sex: 'male' });
+    const keys = Object.keys(r.values)
+      .filter((k) => k !== 'weightKg' && k !== 'impedanceOhm' && typeof r.values[k] !== 'object');
+    return { keys: keys.length, trusted: r.trust.impedanceDerived };
+  };
+
+  const good = count(520);
+  assert.strictEqual(good.keys, 24);
+  assert.strictEqual(good.trusted, true, 'a plausible impedance is believed');
+
+  const rejected = count(3115.6);                 // the value the real scale sent
+  assert.strictEqual(rejected.keys, 24, 'a REJECTED impedance still produces every value');
+  assert.strictEqual(rejected.trusted, false, 'but they are marked not believable');
+
+  const absent = count(0);
+  assert.strictEqual(absent.keys, 9, 'only an ABSENT impedance shrinks the set');
+  assert.strictEqual(absent.trusted, false);
+
+  assert.strictEqual(rejected.keys, good.keys,
+    'the count cannot distinguish a good reading from a rejected one; only trust can');
+  assert.notStrictEqual(rejected.trusted, good.trusted,
+    'trust is the only signal that separates them');
+});

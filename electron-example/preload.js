@@ -29,7 +29,11 @@ contextBridge.exposeInMainWorld('scale', {
   cancel:  () => ipcRenderer.invoke('scale:cancel'),
   status:  () => ipcRenderer.invoke('scale:status'),
   forget:  () => ipcRenderer.invoke('scale:forget'),
-  openBluetoothSettings: () => ipcRenderer.invoke('scale:openBluetoothSettings'),
+  /**
+   * Open the settings page that can actually fix this failure.
+   * @param {'PERMISSION_DENIED'|'BLUETOOTH_UNAVAILABLE'} code
+   */
+  openBluetoothSettings: (code) => ipcRenderer.invoke('scale:openBluetoothSettings', code),
 
   onProgress: on('scale:progress'),
   onLog:      on('scale:log'),
