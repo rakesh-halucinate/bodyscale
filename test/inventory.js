@@ -86,7 +86,9 @@ if (AS_JSON) {
     })).filter((a) => a.count > 0),
     undocumented: all.filter((c) => !c.prevents).map((c) => c.id),
   }, null, 2) + '\n');
-  process.exit(0);
+  // No process.exit here: on a pipe, stdout is asynchronous, and exiting
+  // immediately truncates a payload this size mid-string.
+  return;
 }
 
 const out = (s) => process.stdout.write(s + '\n');
