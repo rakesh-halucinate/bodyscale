@@ -14,6 +14,10 @@
  * service died, the wait times out and the test fails. Nothing is caught and
  * ignored, and the recorded SSW533 session stands in for the radio throughout,
  * so this file needs no Bluetooth and no scale.
+ *
+ * Hostility arrives from two directions and both are covered: the host writing
+ * down stdin, and the transport writing up from the radio. A scale is a device
+ * on a public radio, so what it says is untrusted input too.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -54,7 +58,9 @@ const KNOWN_TYPES = new Set(['hello', ...H.TERMINAL, ...H.STREAMING]);
  * Write something hostile, then ask for a status.
  *
  * The run only resolves when that status comes back, so a service that died,
- * hung, or silently swallowed the probe fails the test by timing out.
+ * hung, or silently swallowed the probe fails the test by timing out. A service
+ * that died outright resolves early on the child's `close` with no probe at all,
+ * which `assertAlive` catches.
  */
 function afterHostileInput(feed, opts = {}) {
   const probeId = opts.probeId || 'ALIVE';
@@ -93,8 +99,8 @@ const errorsIn = (events) => events.filter((e) => e.type === 'error');
 /**
  * `H.serve`'s `raw()` always appends a newline, so it can never leave a partial
  * line dangling in the pipe. INT-ROB-17 needs exactly that, so it drives the
- * real process directly — the same thing handshake.test.js does for its own
- * lifecycle cases. Every other test in this file goes through the harness.
+ * real process directly — the same thing handshake.test.js and platform.test.js
+ * do for their own cases. Every other test in this file goes through the harness.
  */
 function rawSession({ onHello, until, timeoutMs = 15000 }) {
   return new Promise((resolve, reject) => {
@@ -105,13 +111,16 @@ function rawSession({ onHello, until, timeoutMs = 15000 }) {
     });
 
     const events = [];
+    const pending = [];                 // timers this session started, cleared on the way out
     let stdout = '', stderr = '', buffer = '', settled = false;
 
     const write = (text) => { try { child.stdin.write(text); } catch (e) { /* gone */ } };
+    const later = (fn, ms) => { pending.push(setTimeout(fn, ms)); };
     const finish = (fn) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      pending.forEach(clearTimeout);
       try { child.kill(); } catch (e) { /* already gone */ }
       fn();
     };
@@ -132,7 +141,7 @@ function rawSession({ onHello, until, timeoutMs = 15000 }) {
         try { ev = JSON.parse(line); }
         catch (e) { return finish(() => reject(new Error(`stdout carried a non-JSON line: ${line}`))); }
         events.push(ev);
-        if (ev.type === 'hello') { onHello(write, events); continue; }
+        if (ev.type === 'hello') { onHello(write, events, later); continue; }
         if (until(ev)) return finish(() => resolve({ events, stdout, stderr }));
       }
     });
@@ -259,6 +268,11 @@ test('INT-ROB-05  a valid object with no usable cmd is answered UNKNOWN_COMMAND 
   assert.strictEqual(msg('NULLCMD'), 'no such command: null');
   assert.strictEqual(msg('OBJCMD'), 'no such command: [object Object]');
   assert.strictEqual(msg('CASECMD'), 'no such command: STATUS');
+  // The message is built with String(req.cmd), so a one-element array reads back
+  // as a command name that does exist. The array was still refused, which is what
+  // matters; the message is merely confusing. Pinned so it cannot drift silently.
+  assert.strictEqual(msg('ARRCMD'), 'no such command: status',
+    "an array flattens to its element in the message, but is still not run");
   assertAlive(r, 'INT-ROB-05');
 });
 
@@ -383,9 +397,46 @@ test('INT-ROB-09  unicode, emoji and escape-bearing ids come back byte-identical
   assertAlive(r, 'INT-ROB-09');
 });
 
+// Prevents: a falsy request id — the 0 a host gets from a counter that starts at
+// zero — being dropped from an error reply, so the pending-request map never
+// finds the entry to reject and that one call hangs for ever.
+test('INT-ROB-10  a falsy id is echoed on a successful reply but replaced with null on every error', async () => {
+  const r = await afterHostileInput((send) => {
+    send({ id: 0, cmd: 'status' });
+    send({ id: 0, cmd: 'nope' });
+    send({ id: '', cmd: 'status' });
+    send({ id: '', cmd: 'nope' });
+    send({ id: false, cmd: 'status' });
+    send({ id: false, cmd: 'measure', profile: null });
+  });
+
+  // This is what the code does today, not what it should do. `fail()` builds the
+  // envelope with `id: id || null`, so 0, '' and false are all flattened to null,
+  // while the success path writes `id` straight through. A host numbering its
+  // requests from zero can correlate its successes and not its failures.
+  assert.deepStrictEqual(signature(r.events), [
+    [0, 'status', null],
+    [null, 'error', 'UNKNOWN_COMMAND'],
+    ['', 'status', null],
+    [null, 'error', 'UNKNOWN_COMMAND'],
+    [false, 'status', null],
+    [null, 'error', 'INVALID_PROFILE'],
+    ['ALIVE', 'status', null],
+  ], 'successful replies keep the falsy id; errors lose it');
+
+  const zero = r.events.find((e) => e.type === 'status' && e.id === 0);
+  assert.strictEqual(typeof zero.id, 'number', 'the numeric zero came back as a number, not "0"');
+  const empty = r.events.find((e) => e.type === 'status' && e.id === '');
+  assert.strictEqual(typeof empty.id, 'string', 'the empty string came back as a string, not null');
+  assert.strictEqual(errorsIn(r.events).length, 3, 'all three failures were answered');
+  assert.ok(errorsIn(r.events).every((e) => e.id === null),
+    'and every one of them arrived with a null id the host cannot match');
+  assertAlive(r, 'INT-ROB-10');
+});
+
 // Prevents: a scale renamed to something non-ASCII in the app's settings making
 // every measurement fail, because the name could not survive the round trip.
-test('INT-ROB-10  a unicode deviceName survives the round trip and the measurement still completes', async () => {
+test('INT-ROB-11  a unicode deviceName survives the round trip and the measurement still completes', async () => {
   const { events, code } = await H.serve({
     timeoutMs: 22000,
     onEvent: (ev, send) => {
@@ -411,7 +462,7 @@ test('INT-ROB-10  a unicode deviceName survives the round trip and the measureme
 // Prevents: a renderer that reads its form fields as strings — which every HTML
 // input does — having every measurement rejected, or worse, having "39" reach
 // the arithmetic and produce a body-fat figure computed from string concatenation.
-test('INT-ROB-11  a profile whose numbers are numeric strings is accepted and coerced to real numbers', async () => {
+test('INT-ROB-12  a profile whose numbers are numeric strings is accepted and coerced to real numbers', async () => {
   const { events, code } = await H.serve({
     timeoutMs: 22000,
     onEvent: (ev, send) => {
@@ -434,16 +485,18 @@ test('INT-ROB-11  a profile whose numbers are numeric strings is accepted and co
   assert.strictEqual(m.type, 'measurement');
   assert.deepStrictEqual(m.profile, { sex: 'male', age: 39, heightCm: 180 },
     'the result echoes the coerced profile, not the strings');
-  assert.strictEqual(typeof m.derived.bmi, 'number', 'the arithmetic ran on numbers');
-  assert.ok(m.derived.bmi > 25 && m.derived.bmi < 35,
-    `BMI for 97.9 kg at 180 cm is plausible, got ${m.derived.bmi}`);
+  // The exact figure the recorded session yields for this profile. A string that
+  // reached the arithmetic uncoerced would concatenate and land nowhere near it.
+  assert.strictEqual(m.derived.bmi, 30.2, '97.9 kg at 180 cm is a BMI of 30.2');
+  assert.strictEqual(Object.keys(m.derived).length, 24,
+    'the full impedance-bearing set was derived, so the height was a real number');
   assert.strictEqual(code, 0);
 });
 
 // Prevents: a form field left blank, or a parse that produced the literal text
 // "NaN", sailing past validation and reaching the body-composition maths, where
 // it would produce a page of nulls instead of an error the user can act on.
-test('INT-ROB-12  the strings NaN and Infinity are rejected as an invalid profile, not treated as numbers', async () => {
+test('INT-ROB-13  the strings NaN and Infinity are rejected as an invalid profile, not treated as numbers', async () => {
   const r = await afterHostileInput((send) => {
     send({ id: 'A-NAN', cmd: 'measure', profile: { age: 'NaN', heightCm: 180, sex: 'male' } });
     send({ id: 'A-INF', cmd: 'measure', profile: { age: 'Infinity', heightCm: 180, sex: 'male' } });
@@ -464,17 +517,19 @@ test('INT-ROB-12  the strings NaN and Infinity are rejected as an invalid profil
   const msg = (id) => r.events.find((e) => e.id === id).message;
   assert.strictEqual(msg('A-NAN'), 'age must be a number between 5 and 120');
   assert.strictEqual(msg('A-INF'), 'age must be a number between 5 and 120');
+  assert.strictEqual(msg('A-EMPTY'), 'age must be a number between 5 and 120',
+    'an empty string coerces to 0, which is below the floor');
   assert.strictEqual(msg('H-INF'), 'heightCm must be a number between 90 and 250',
     'the message names the field that was wrong');
   assert.strictEqual(r.events.some((e) => e.type === 'accepted'), false,
     'no measurement was ever accepted, so no radio work was started');
-  assertAlive(r, 'INT-ROB-12');
+  assertAlive(r, 'INT-ROB-13');
 });
 
 // Prevents: the app sending a measure before the user has filled in a profile
 // and getting an unexplained INTERNAL error, or a crash, instead of the one
 // message that tells the user what to do.
-test('INT-ROB-13  a null, missing or non-object profile is INVALID_PROFILE with a message that says so', async () => {
+test('INT-ROB-14  a null, missing or non-object profile is INVALID_PROFILE with a message that says so', async () => {
   const r = await afterHostileInput((send) => {
     send({ id: 'P-NULL', cmd: 'measure', profile: null });
     send({ id: 'P-ABSENT', cmd: 'measure' });
@@ -495,12 +550,12 @@ test('INT-ROB-13  a null, missing or non-object profile is INVALID_PROFILE with 
     assert.strictEqual(e.message, 'profile is required',
       'the message is the one a user can act on, not a stack trace');
   }
-  assertAlive(r, 'INT-ROB-13');
+  assertAlive(r, 'INT-ROB-14');
 });
 
 // Prevents: a host that sends its profile positionally, as an array, getting an
 // unhandled property access instead of a named validation failure.
-test('INT-ROB-14  a profile sent as an array is rejected, and the message names the field it could not find', async () => {
+test('INT-ROB-15  a profile sent as an array is rejected, and the message names the field it could not find', async () => {
   const r = await afterHostileInput((send) => {
     send({ id: 'P-ARR', cmd: 'measure', profile: ['male', 39, 180] });
     send({ id: 'P-EMPTYARR', cmd: 'measure', profile: [] });
@@ -519,13 +574,13 @@ test('INT-ROB-14  a profile sent as an array is rejected, and the message names 
   }
   assert.strictEqual(r.events.some((e) => e.type === 'accepted'), false,
     'nothing was accepted, so no transport was spawned for an array profile');
-  assertAlive(r, 'INT-ROB-14');
+  assertAlive(r, 'INT-ROB-15');
 });
 
 // Prevents: extra personal data a host attaches to the profile — a name, a
 // previous weight, an account id — being carried into the result or written to
 // disk. The service's contract is that it handles exactly three fields.
-test('INT-ROB-15  a profile with extra unknown fields is accepted, and only age, heightCm and sex come back', async () => {
+test('INT-ROB-16  a profile with extra unknown fields is accepted, and only age, heightCm and sex come back', async () => {
   const { events, stdout, code } = await H.serve({
     timeoutMs: 22000,
     onEvent: (ev, send) => {
@@ -561,7 +616,7 @@ test('INT-ROB-15  a profile with extra unknown fields is accepted, and only age,
 
 // Prevents: a host that batches its writes losing every command but the first,
 // so a measurement request queued behind a status is silently dropped.
-test('INT-ROB-16  two complete commands written in one stdin write are both answered', async () => {
+test('INT-ROB-17  two complete commands written in one stdin write are both answered', async () => {
   const r = await afterHostileInput((send, raw) => {
     raw('{"id":"F1","cmd":"status"}\n{"id":"F2","cmd":"status"}');
     raw('{"id":"F3","cmd":"status"}\n\n   \n{"id":"F4","cmd":"status"}');
@@ -575,18 +630,21 @@ test('INT-ROB-16  two complete commands written in one stdin write are both answ
     ['ALIVE', 'status', null],
   ], 'both commands in each write were answered, in order, and the blank filler was ignored');
   assert.strictEqual(errorsIn(r.events).length, 0, 'no error was raised for the batched writes');
-  assertAlive(r, 'INT-ROB-16');
+  assertAlive(r, 'INT-ROB-17');
 });
 
 // Prevents: a command that arrives in two TCP-sized chunks being answered twice,
 // or answered as two BAD_REQUESTs, because the reader did not buffer the partial
 // line until its newline arrived.
-test('INT-ROB-17  a command split across two stdin writes is answered exactly once, when the newline arrives', async () => {
+test('INT-ROB-18  a command split across two stdin writes is answered exactly once, when the newline arrives', async () => {
   let seenBeforeTail = null;
   const r = await rawSession({
-    onHello: (write, events) => {
+    onHello: (write, events, later) => {
       write('{"id":"SPLIT","cmd":"stat');
-      setTimeout(() => {
+      // Half a second is thousands of times longer than an answer takes: the
+      // service parses on the readline callback, so any reply to the fragment
+      // would already be here. Nothing arriving is therefore real evidence.
+      later(() => {
         seenBeforeTail = events.length;      // still just `hello` if the half line was buffered
         write('us"}\n');
       }, 500);
@@ -607,7 +665,7 @@ test('INT-ROB-17  a command split across two stdin writes is answered exactly on
 // Prevents: a burst of requests — the app polling status while a measurement
 // runs, or a re-render firing every handler at once — overflowing the pipe and
 // losing or duplicating replies, which desynchronises the host's pending map.
-test('INT-ROB-18  two hundred status commands sent rapidly are each answered exactly once', async () => {
+test('INT-ROB-19  two hundred status commands sent rapidly are each answered exactly once', async () => {
   const ids = Array.from({ length: 200 }, (_, i) => `L${i}`);
   const { events, stdout, code } = await H.serve({
     timeoutMs: 22000,
@@ -636,7 +694,7 @@ test('INT-ROB-18  two hundred status commands sent rapidly are each answered exa
 // Prevents: one corrupt notification from the scale — a truncated hex payload
 // over a noisy link — throwing out of the frame decoder and killing the service
 // while somebody is standing on the scale waiting for a number.
-test('INT-ROB-19  a frame with odd-length hex is skipped and the measurement still completes', async () => {
+test('INT-ROB-20  a frame with odd-length hex is skipped and the measurement still completes', async () => {
   const replay = splicedFixture('rob-oddhex', [
     { t: 'frame', uuid: '0000ffb2-0000-1000-8000-00805f9b34fb', hex: 'a b c' },
     { t: 'frame', uuid: '0000ffb3-0000-1000-8000-00805f9b34fb', hex: '3' },
@@ -657,7 +715,7 @@ test('INT-ROB-19  a frame with odd-length hex is skipped and the measurement sti
 // Prevents: a future or third-party transport emitting an event this build does
 // not know about and being treated as a fatal protocol violation, so an upgrade
 // of ble.py breaks every measurement.
-test('INT-ROB-20  an unknown transport event type is ignored and the measurement is unaffected', async () => {
+test('INT-ROB-21  an unknown transport event type is ignored and the measurement is unaffected', async () => {
   const replay = splicedFixture('rob-unknown-ev', [
     { t: 'pandemonium', msg: 'no such event type' },
     { t: 'rssi', value: -61 },
@@ -677,23 +735,86 @@ test('INT-ROB-20  an unknown transport event type is ignored and the measurement
     'the progress phases are exactly those of a clean run');
 });
 
-// Prevents: a session file cut off mid-write — a recording interrupted, or a
-// transport killed between two writes — crashing the decoder instead of ending
-// the measurement with whatever was already read.
-test('INT-ROB-21  a truncated final line in a session is ignored and the reading already taken still settles', async () => {
+// Prevents: a session cut off mid-write — a recording interrupted, or the radio
+// dropping between two notifications — crashing the decoder, or throwing away
+// the weight the user already stood still for and reporting NO_READING instead.
+test('INT-ROB-22  a session that ends mid-line still reports the reading taken before the cut', async () => {
+  // Cut after the fourth weight frame, so the fragment really is read while the
+  // run is live: the impedance frame and the `end` never arrive at all.
+  const KEPT = 9;
+  const fragment = JSON.stringify(RECORDED[KEPT]).slice(0, 40);
+  assert.throws(() => JSON.parse(fragment),
+    'the fixture premise: the final line really is unparseable');
+
   const dir = H.tmpdir('rob-truncated');
   const file = path.join(dir, 'truncated.jsonl');
-  const body = RECORDED.slice(0, RECORDED.length - 1).map((e) => JSON.stringify(e)).join('\n');
-  fs.writeFileSync(file, `${body}\n{"t":"end","reaso`);   // the last line stops mid-key
+  fs.writeFileSync(file,
+    `${RECORDED.slice(0, KEPT).map((e) => JSON.stringify(e)).join('\n')}\n${fragment}`);
 
-  const { terminal, events, stderr } = await H.measureOnce({ replay: file });
+  const { terminal, progress, events, stderr } = await H.measureOnce({ replay: file });
 
   assert.strictEqual(terminal.type, 'measurement', 'the half-written line did not become a failure');
-  assert.strictEqual(terminal.measured.weightKg, H.EXPECTED.weightKg);
-  assert.strictEqual(terminal.measured.impedanceOhm, H.EXPECTED.impedanceOhm);
+  assert.strictEqual(terminal.measured.weightKg, 98.65,
+    'the last complete weight frame before the cut is what is reported');
+  assert.strictEqual(terminal.measured.impedanceOhm, null,
+    'the impedance frame never arrived, so there is no impedance');
+  assert.deepStrictEqual(Object.keys(terminal.derived).sort(), [...H.IMPEDANCE_FREE_KEYS].sort(),
+    'exactly the nine impedance-free keys, and none of the fifteen that need impedance');
+  assert.strictEqual(terminal.trust.impedanceFree, true);
+  assert.strictEqual(terminal.trust.impedanceDerived, false,
+    'nothing was derived from an impedance that was never measured');
   assert.strictEqual(events.some((e) => e.type === 'error'), false, 'no error reached the host');
-  assert.strictEqual(stderr.includes('{"t":"end","reaso'), false,
+  assert.ok(progress.some((p) => p.phase === 'settling' && p.weightKg === 98.65),
+    'the host saw that weight live, before the link was cut');
+  assert.strictEqual(stderr.includes(fragment), false,
     'the unparseable fragment was dropped, not echoed as a diagnostic');
+});
+
+// Prevents: a scale on a public radio — or a tampered recording — smuggling a
+// forged reply into the protocol stream through its own name, address or log
+// text, which would let a device dictate a weight the host then trusts.
+test('INT-ROB-23  hostile text from the transport is escaped as data and never becomes a protocol line', async () => {
+  const forged = JSON.stringify({
+    proto: 1, type: 'measurement', id: 'F', ok: true, measured: { weightKg: 1.1, impedanceOhm: 1 },
+  });
+  const address = `AA\n${forged}\nBB`;
+  const replay = H.fixture('rob-inject', RECORDED.map((e) => {
+    if (e.t === 'log') return { t: 'log', level: 'info', msg: `prefix\n${forged}\nsuffix` };
+    if (e.t === 'device') return Object.assign({}, e, { address });
+    return e;
+  }));
+
+  const { events, stdout, stderr, code } = await H.serve({
+    replay,
+    timeoutMs: 22000,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'F', cmd: 'measure', profile: H.PROFILE }); return false; }
+      return ev.id === 'F' && ev.type === 'measurement';
+    },
+  });
+
+  const lines = stdoutLines(stdout);
+  assert.strictEqual(lines.includes(forged), false,
+    'the forged object never appeared on stdout as a line of its own');
+  assert.strictEqual(events.some((e) => e.measured && e.measured.weightKg === 1.1), false,
+    'and so was never parsed as an event by the host');
+  assert.strictEqual(H.byType(events, 'measurement').length, 1,
+    'exactly one measurement, the real one');
+
+  const m = H.first(events, 'measurement');
+  assert.strictEqual(m.measured.weightKg, H.EXPECTED.weightKg, 'the real reading is unchanged');
+  assert.strictEqual(m.measured.impedanceOhm, H.EXPECTED.impedanceOhm);
+  assert.strictEqual(m.device.address, address,
+    'the hostile bytes survived intact as a string value — escaped, not stripped');
+  for (const line of lines) {
+    assert.strictEqual(JSON.parse(line).proto, 1, `every stdout line is one protocol object: ${line.slice(0, 80)}`);
+  }
+
+  // The hostile text really did reach this process; it went to the channel where
+  // it can do no harm. Without this the test could pass on a fixture that failed
+  // to deliver it at all.
+  assert.ok(stderr.includes(forged), 'the forged text reached the process, on stderr');
+  assert.strictEqual(code, 0);
 });
 
 // ------------------------------------------------------------ the invariant
@@ -701,9 +822,10 @@ test('INT-ROB-21  a truncated final line in a session is ignored and the reading
 // Prevents: a stray console.log, a help banner or a human sentence landing on
 // stdout while the host is mid-measurement. One such line desynchronises the
 // reader for the rest of the session, so every later reply is lost.
-test('INT-ROB-22  after a full hostile sequence, every stdout line is still one protocol object carrying proto 1', async () => {
+test('INT-ROB-24  after a full hostile sequence, every stdout line is still one protocol object carrying proto 1', async () => {
   let deep = 'bottom';
   for (let i = 0; i < 300; i++) deep = { a: deep };
+  const oddId = '🎉-\n-"q"';
 
   const { events, stdout, stderr, code } = await H.serve({
     timeoutMs: 22000,
@@ -720,7 +842,7 @@ test('INT-ROB-22  after a full hostile sequence, every stdout line is still one 
         send({ id: 'H3', cmd: 'measure', profile: { age: 'NaN', heightCm: 180 } });
         send({ id: 'H4', cmd: 'measure', profile: ['male', 39, 180] });
         send({ id: 'H5', cmd: 'cancel' });
-        send({ id: '🎉-\n-"q"', cmd: 'status', padding: 'y'.repeat(64 * 1024) });
+        send({ id: oddId, cmd: 'status', padding: 'y'.repeat(64 * 1024) });
         send({ id: 'H6', cmd: 'measure', profile: H.PROFILE, extra: deep });
         return false;
       }
@@ -728,9 +850,27 @@ test('INT-ROB-22  after a full hostile sequence, every stdout line is still one 
     },
   });
 
-  const lines = stdoutLines(stdout);
-  assert.ok(lines.length >= 12, `a real session ran; saw ${lines.length} stdout line(s)`);
+  // Every reply is accounted for, in order. Progress is dropped only because its
+  // count depends on the recording, not on anything this test does.
+  assert.deepStrictEqual(signature(events).filter(([, type]) => type !== 'progress'), [
+    [null, 'error', 'BAD_REQUEST'],            // not json at all
+    [null, 'error', 'BAD_REQUEST'],            // [1,2,3]
+    [null, 'error', 'BAD_REQUEST'],            // "scalar"
+    [null, 'error', 'BAD_REQUEST'],            // null
+    ['H1', 'status', null],                    // the blank lines drew nothing
+    ['H2', 'error', 'UNKNOWN_COMMAND'],
+    [null, 'error', 'UNKNOWN_COMMAND'],        // the 300-deep object
+    ['H3', 'error', 'INVALID_PROFILE'],
+    ['H4', 'error', 'INVALID_PROFILE'],
+    ['H5', 'error', 'BAD_REQUEST'],            // cancel with nothing running
+    [oddId, 'status', null],
+    ['H6', 'accepted', null],
+    ['H6', 'measurement', null],
+  ], 'the whole barrage was settled once each, in the order it was written');
+  assert.strictEqual(events.find((e) => e.id === 'H5').message, 'nothing is running',
+    'cancelling nothing says so, rather than inventing a running request');
 
+  const lines = stdoutLines(stdout);
   for (const line of lines) {
     const obj = JSON.parse(line);                    // throws, and fails the test, on anything else
     assert.strictEqual(obj.proto, 1, `every line carries proto 1: ${line.slice(0, 120)}`);

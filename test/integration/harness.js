@@ -59,6 +59,34 @@ function tmpdir(tag) {
 }
 
 /**
+ * Make a config directory hermetic.
+ *
+ * `readConfig()` tries the per-user config first and then falls back to a
+ * `.scale-config.json` sitting beside the script. So pointing a test at an
+ * EMPTY scratch directory does not isolate it: the service reads the
+ * developer's own remembered device instead, and 21 test files running
+ * concurrently all see the same shared state.
+ *
+ * Writing an empty object stops the fallback dead while still presenting a
+ * service that remembers nothing, which is the state most tests want. An
+ * existing file is never overwritten, so a test that seeds its own config
+ * still gets it.
+ */
+function seedConfigDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'scale-config.json');
+    if (!fs.existsSync(file)) fs.writeFileSync(file, '{}\n');
+  } catch (e) { /* an unwritable directory is itself under test */ }
+  return dir;
+}
+
+/** A scratch config directory that is already isolated from the repository. */
+function configDir(tag) {
+  return seedConfigDir(tmpdir(tag || 'cfg'));
+}
+
+/**
  * Write a one-off replay fixture.
  * @param {string} tag  directory tag
  * @param {object[]} events  transport events, one per line
@@ -99,10 +127,15 @@ function serve(opts) {
     if (replay) argv.push('--replay', replay);
     argv.push(...args);
 
+    // Seed whichever config directory this run will use, including one the
+    // caller supplied, so the legacy fallback can never reach the repository.
+    const childEnv = Object.assign({}, process.env, { BODYSCALE_CONFIG_DIR: tmpdir('cfg') }, env);
+    seedConfigDir(childEnv.BODYSCALE_CONFIG_DIR);
+
     const child = spawn(process.execPath, argv, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: ROOT,
-      env: Object.assign({}, process.env, { BODYSCALE_CONFIG_DIR: tmpdir('cfg') }, env),
+      env: childEnv,
     });
 
     const events = [];
@@ -188,6 +221,6 @@ function assertShape(assert, obj, spec, where) {
 module.exports = {
   ROOT, SCALE, FIXTURE, CLIENT, PROFILE, EXPECTED,
   TERMINAL, STREAMING, IMPEDANCE_FREE_KEYS, IMPEDANCE_ONLY_KEYS, ALL_ERROR_CODES,
-  tmpdir, fixture, fixtureWithoutImpedance, serve, measureOnce,
+  tmpdir, configDir, seedConfigDir, fixture, fixtureWithoutImpedance, serve, measureOnce,
   byType, first, assertShape,
 };

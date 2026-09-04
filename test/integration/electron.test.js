@@ -15,9 +15,11 @@
  * event fails here exactly as it would in the packaged app.
  *
  * `main.js` is a singleton: requiring it twice would not re-run it. So it is
- * required once, at file scope, and the tests are ordered. The ones that need
- * the service down run before `whenReady` is resolved; the ones that mutate the
- * remembered device or stop the service run last.
+ * required once, at file scope, and the tests are ordered — node:test runs the
+ * top-level tests of one file sequentially, in declaration order. The ones that
+ * need the service down run first, before `whenReady` is released; the ones
+ * that forget the remembered device or stop the service run last. Every test
+ * in between is idempotent and re-runnable on its own.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -53,7 +55,7 @@ const openedUrls = [];               // everything handed to shell.openExternal
 const windows = [];                  // every BrowserWindow ever constructed
 const invokes = [];                  // { channel, args } the preload asked ipcRenderer for
 const rendererListeners = [];        // { channel, fn } the preload subscribed with
-let exposed = [];                    // every contextBridge.exposeInMainWorld call
+const exposed = [];                  // every contextBridge.exposeInMainWorld call
 let quits = 0;
 
 let releaseReady = null;
@@ -64,7 +66,6 @@ const app = Object.assign(new EventEmitter(), {
   isQuiting: false,                                  // main.js sets this on before-quit
   whenReady() { return readyGate; },                 // held shut until boot()
   quit() { quits++; },
-  getPath() { return CONFIG_DIR; },
 });
 
 class BrowserWindow extends EventEmitter {
@@ -103,8 +104,10 @@ const electronStub = {
  * A scratch config directory, seeded with a config from an "older version":
  * it remembers a device AND a profile. The service must adopt the device and
  * drop the profile the first time it writes. Seeding rather than starting empty
- * also makes `hello.device` deterministic — an empty directory would still fall
- * back to any .scale-config.json sitting beside the script.
+ * also makes `hello.device` deterministic — scale.js falls back to a
+ * `.scale-config.json` sitting beside the script when the config directory is
+ * empty, so an empty directory would NOT isolate this suite from the repo's own
+ * remembered device.
  */
 const CONFIG_DIR = H.tmpdir('elec-cfg');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'scale-config.json');
@@ -134,6 +137,7 @@ try {
   Module._resolveFilename = realResolve;
 }
 
+assert.strictEqual(exposed.length, 1, 'the preload exposed exactly one bridge while loading');
 const bridge = exposed[0];
 
 // ---------------------------------------------------------------- the helpers
@@ -232,7 +236,6 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
 // script the renderer loads, and undoes the reason this app spawns Bluetooth in
 // the main process at all.
 test('INT-ELEC-02  the preload exposes one closed surface on window.scale, all functions', async () => {
-  assert.strictEqual(exposed.length, 1, 'exposeInMainWorld was called exactly once');
   assert.strictEqual(bridge.key, 'scale', 'the surface is window.scale');
   assert.deepStrictEqual(Object.keys(bridge.api).sort(), SURFACE.slice().sort(),
     'exactly the intended methods, nothing more');
@@ -290,8 +293,7 @@ test('INT-ELEC-04  with the service not yet up, every command returns a typed fa
       `${channel} fails with a code the UI can switch on`);
   }
   assert.strictEqual(windows.length, 0, 'no window exists before whenReady resolves');
-  assert.strictEqual(H.ALL_ERROR_CODES.includes('TRANSPORT_FAILED'), true,
-    'TRANSPORT_FAILED is one of the service\'s own codes, not an invention of main.js');
+  assert.strictEqual(pushed.length, 0, 'and nothing has been pushed at a renderer that is not there');
 });
 
 // =============================================================== after boot ==
@@ -334,10 +336,10 @@ test('INT-ELEC-06  the window loads a preload and a page that exist on disk', as
 // second service would leave two children fighting over one Bluetooth radio.
 test('INT-ELEC-07  scale:start reports a hello, and starting again is idempotent', async () => {
   const first = await boot();
-  assert.strictEqual(first.ok, true);
   assert.strictEqual(first.hello.proto, 1, 'the reply carries the protocol version');
   assert.strictEqual(first.hello.type, 'hello');
   assert.strictEqual(first.hello.app, 'bodyscale');
+  assert.strictEqual(first.hello.platform, process.platform);
   assert.deepStrictEqual(first.hello.commands, ['measure', 'cancel', 'status', 'forget', 'shutdown']);
   assert.deepStrictEqual(first.hello.errorCodes, H.ALL_ERROR_CODES);
 
@@ -372,17 +374,23 @@ test('INT-ELEC-09  scale:status answers idle, with the remembered device', async
   await boot();
   const r = await call('scale:status');
   assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.status.type, 'status');
   assert.strictEqual(r.status.busy, false, 'nothing is running');
   assert.strictEqual(r.status.runningId, null);
   assert.strictEqual(r.status.proto, 1);
   assert.strictEqual(r.status.platform, process.platform);
-  assert.deepStrictEqual(r.status.device, { name: 'OLD-NAME', address: 'OLD-ADDRESS' });
+  assert.ok(r.status.device, 'a device is remembered: ' + JSON.stringify(r.status.device));
+  assert.strictEqual(r.status.device.address, 'OLD-ADDRESS');
+  assert.strictEqual(r.status.device.name, 'OLD-NAME');
 });
 
 // The remembered device is what makes the second measurement instant instead of
 // a full scan. The profile must NOT be remembered with it: a config written by
 // an older version still carries one, and leaving it there lets a later release
 // fall back to a stale age and height instead of asking the host.
+//
+// This is the FIRST measurement in the file, and it is the only test that may
+// rely on the seeded config still being untouched.
 test('INT-ELEC-10  the first measurement remembers the scale and drops the inherited profile', async () => {
   await boot();
   const before = readConfigFile();
@@ -441,17 +449,23 @@ test('INT-ELEC-12  live progress and service logs reach the renderer while measu
   const progress = pushesSince(mark, 'scale:progress');
   assert.ok(progress.length >= 3, `progress was forwarded, got ${progress.length}`);
   const phases = progress.map((p) => p.payload.phase);
-  assert.ok(phases.includes('connected'), `a connected phase arrived, saw [${phases.join(', ')}]`);
-  assert.ok(phases.includes('ready'), 'the "stand on the scale" phase arrived');
+  assert.deepStrictEqual(phases.slice(0, 2), ['connected', 'ready'],
+    `the connect and "stand on the scale" phases arrive first, saw [${phases.join(', ')}]`);
+  assert.deepStrictEqual([...new Set(phases.slice(2))], ['settling'],
+    'and everything after them is a settling reading');
+
   const live = progress.filter((p) => typeof p.payload.weightKg === 'number' && p.payload.weightKg > 0);
   assert.ok(live.length >= 1, 'at least one live weight reached the renderer');
   assert.strictEqual(live[live.length - 1].payload.weightKg, H.EXPECTED.weightKg,
     'the last live weight is the one the reply settles on');
   for (const p of progress) assert.strictEqual(p.payload.proto, 1);
 
-  const logs = pushesSince(mark, 'scale:log');
-  assert.ok(logs.length >= 1, 'the service\'s stderr reached the renderer');
-  for (const l of logs) assert.strictEqual(typeof l.payload, 'string', 'log lines are plain strings');
+  // stderr is a separate pipe, so its last lines may land after the reply.
+  await waitFor(() => pushesSince(mark, 'scale:log').length >= 1,
+    'the service stderr to reach the renderer', 4000);
+  for (const l of pushesSince(mark, 'scale:log')) {
+    assert.strictEqual(typeof l.payload, 'string', 'log lines are plain strings');
+  }
 
   const strays = pushesSince(mark).filter((p) => !PUSH_CHANNELS.includes(p.channel));
   assert.deepStrictEqual(strays, [], 'nothing is pushed on a channel the preload does not listen on');
@@ -465,24 +479,66 @@ test('INT-ELEC-13  a bad profile comes back as a typed failure, not a throw', as
   const r = await call('scale:measure', { age: 2, heightCm: 180 });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 'INVALID_PROFILE');
-  assert.strictEqual(typeof r.message, 'string');
-  assert.ok(r.message.length > 0, 'and carries a message the UI can show');
+  assert.strictEqual(r.message, 'age must be a number between 5 and 120',
+    'the service\'s own explanation survives the crossing');
   assert.strictEqual(r.detail, null);
 
   const missing = await call('scale:measure', undefined);
   assert.strictEqual(missing.ok, false, 'no profile at all is refused too');
   assert.strictEqual(missing.code, 'INVALID_PROFILE');
+  assert.strictEqual(missing.message, 'profile is required');
 
   const still = await call('scale:status');
   assert.strictEqual(still.ok, true, 'the service survived both');
   assert.strictEqual(still.status.busy, false, 'and did not leave itself marked busy');
 });
 
+// Two Measure clicks in a row must not corrupt each other. The replies come back
+// interleaved on one pipe — the second request's refusal arrives BEFORE the
+// first request's progress and result — so a main process that matched replies
+// by arrival order instead of by id would hand the winner's body composition to
+// the loser, or settle the first click with the second's error.
+test('INT-ELEC-14  a second measurement is refused with BUSY while the first still completes', async () => {
+  await boot();
+  const firstCall = call('scale:measure', H.PROFILE);
+  const secondCall = call('scale:measure', H.PROFILE);
+  const [first, second] = await Promise.all([firstCall, secondCall]);
+
+  assert.strictEqual(second.ok, false, 'the second click is refused: ' + JSON.stringify(second));
+  assert.strictEqual(second.code, 'BUSY');
+  assert.strictEqual(second.message, 'a measurement is already running; cancel it first');
+
+  assert.strictEqual(first.ok, true, 'and the first still completed: ' + JSON.stringify(first));
+  assert.strictEqual(first.result.measured.weightKg, H.EXPECTED.weightKg,
+    'with its own result, not the other request\'s error');
+  assert.strictEqual(Object.keys(first.result.derived).length, 24);
+});
+
+// Cancel is the only way off a scale that is not going to settle. If it did not
+// reach the running measurement, the Cancel button would clear the screen while
+// the child kept the radio, and the next Measure would come back BUSY for ever.
+test('INT-ELEC-15  cancel stops a running measurement and settles it as CANCELLED', async () => {
+  await boot();
+  const measuring = call('scale:measure', H.PROFILE);
+  const cancelled = await call('scale:cancel');
+  assert.deepStrictEqual(cancelled, { ok: true }, 'the cancel itself succeeded');
+
+  const outcome = await measuring;
+  assert.strictEqual(outcome.ok, false, 'the measurement did not also report success');
+  assert.strictEqual(outcome.code, 'CANCELLED');
+  assert.strictEqual(outcome.message, 'the measurement was cancelled');
+
+  const after = await call('scale:status');
+  assert.strictEqual(after.ok, true);
+  assert.strictEqual(after.status.busy, false, 'and the service is idle again, not stuck busy');
+  assert.strictEqual(after.status.runningId, null);
+});
+
 // An error that belongs to a request is delivered by that request's reply.
 // Pushing it on scale:error as well made the renderer show every failure twice:
 // once in the result area and once as a toast, with no way for the UI to tell
 // they were the same event.
-test('INT-ELEC-14  a failure that belongs to a request is never also pushed on scale:error', async () => {
+test('INT-ELEC-16  a failure that belongs to a request is never also pushed on scale:error', async () => {
   await boot();
   const mark = pushed.length;
   const bad = await call('scale:measure', { age: 2, heightCm: 180 });
@@ -494,6 +550,7 @@ test('INT-ELEC-14  a failure that belongs to a request is never also pushed on s
   const cancel = await call('scale:cancel');
   assert.strictEqual(cancel.ok, false, 'cancelling with nothing running fails');
   assert.strictEqual(cancel.code, 'BAD_REQUEST');
+  assert.strictEqual(cancel.message, 'nothing is running');
   assert.deepStrictEqual(pushesSince(mark2, 'scale:error'), [],
     'that failure is not duplicated either');
 
@@ -505,7 +562,7 @@ test('INT-ELEC-14  a failure that belongs to a request is never also pushed on s
 // class instance, a function or an undefined-carrying object throws inside
 // Electron at the moment of reply — and nowhere else, so plain Node tests of the
 // client below would never see it.
-test('INT-ELEC-15  every IPC reply survives structuredClone', async () => {
+test('INT-ELEC-17  every IPC reply survives structuredClone', async () => {
   const started = await boot();
   const replies = [
     started,
@@ -515,10 +572,8 @@ test('INT-ELEC-15  every IPC reply survives structuredClone', async () => {
     await call('scale:cancel'),
   ];
   for (const r of replies) {
-    let clone;
-    assert.doesNotThrow(() => { clone = structuredClone(r); },
-      `reply is cloneable: ${JSON.stringify(r).slice(0, 120)}`);
-    assert.deepStrictEqual(clone, r, 'and nothing is lost in the crossing');
+    const clone = structuredClone(r);
+    assert.deepStrictEqual(clone, r, 'nothing is lost in the crossing');
   }
   assert.strictEqual(replies[2].ok, true, 'the measurement reply really was a full result');
   assert.strictEqual(Object.keys(replies[2].result.derived).length, 24);
@@ -527,7 +582,7 @@ test('INT-ELEC-15  every IPC reply survives structuredClone', async () => {
 // A measurement outlives the window if someone closes it mid-reading. Sending to
 // a destroyed webContents throws "Object has been destroyed" inside the main
 // process, which is an uncaught exception and takes the whole app down.
-test('INT-ELEC-16  nothing is pushed at a destroyed window, and the reply still arrives', async () => {
+test('INT-ELEC-18  nothing is pushed at a destroyed window, and the reply still arrives', async () => {
   await boot();
   const win = currentWindow();
   win.destroyed = true;
@@ -542,15 +597,17 @@ test('INT-ELEC-16  nothing is pushed at a destroyed window, and the reply still 
     win.destroyed = false;
   }
   const mark2 = pushed.length;
-  await call('scale:measure', H.PROFILE);
-  assert.ok(pushesSince(mark2).length > 0, 'and pushing resumes once a live window is back');
+  const again = await call('scale:measure', H.PROFILE);
+  assert.strictEqual(again.ok, true, JSON.stringify(again));
+  assert.ok(pushesSince(mark2, 'scale:progress').length > 0,
+    'and pushing resumes once a live window is back');
 });
 
 // PERMISSION_DENIED cannot be retried away: on Windows the app must be ticked in
 // the Bluetooth privacy list, on macOS in Privacy & Security. A button that
 // opens the wrong page, or the Windows page on a Mac, leaves the user with an
 // app that will never work and no way to find out why.
-test('INT-ELEC-17  openBluetoothSettings opens the right page for each platform', async () => {
+test('INT-ELEC-19  openBluetoothSettings opens the right page for each platform', async () => {
   await boot();
   const mark = openedUrls.length;
 
@@ -567,6 +624,8 @@ test('INT-ELEC-17  openBluetoothSettings opens the right page for each platform'
 
   // Neither of the two supported desktops is Linux, and the handler opens
   // nothing there. It still answers, so the UI does not hang on the click.
+  // KNOWN DISCREPANCY: it answers { ok: true } for a no-op, so the button
+  // reports success on Linux without opening anything. Pinned, not fixed.
   const other = await asPlatform('linux', () => call('scale:openBluetoothSettings'));
   assert.deepStrictEqual(other, { ok: true });
   assert.strictEqual(openedUrls.length - mark, 2, 'and nothing was opened on an unsupported platform');
@@ -576,7 +635,7 @@ test('INT-ELEC-17  openBluetoothSettings opens the right page for each platform'
 // app would keep running headless with the Python helper still holding the
 // Bluetooth radio, and the user's only clue would be Task Manager. On macOS the
 // opposite is true: quitting there would break the expected dock behaviour.
-test('INT-ELEC-18  the last window closing quits on Windows but not on macOS', async () => {
+test('INT-ELEC-20  the last window closing quits on Windows but not on macOS', async () => {
   await boot();
   const before = quits;
   await asPlatform('win32', () => { app.emit('window-all-closed'); });
@@ -587,10 +646,9 @@ test('INT-ELEC-18  the last window closing quits on Windows but not on macOS', a
 
 // On macOS clicking the dock icon after closing the window must bring it back.
 // Without this the app is running, visible in the dock, and cannot be reached.
-test('INT-ELEC-19  activating with no window open builds a new one', async () => {
+test('INT-ELEC-21  activating with no window open builds a new one', async () => {
   await boot();
-  const openBefore = BrowserWindow.getAllWindows().length;
-  assert.strictEqual(openBefore, 1, 'one window is open to begin with');
+  assert.strictEqual(BrowserWindow.getAllWindows().length, 1, 'one window is open to begin with');
   currentWindow().destroyed = true;
   assert.strictEqual(BrowserWindow.getAllWindows().length, 0, 'now none are');
 
@@ -603,17 +661,24 @@ test('INT-ELEC-19  activating with no window open builds a new one', async () =>
   assert.strictEqual(fresh.file, path.join(EXAMPLE, 'renderer', 'index.html'));
 
   const mark = pushed.length;
-  await call('scale:status');
   app.emit('activate');
   assert.strictEqual(windows.length, count + 1, 'activating with a window open builds nothing');
   assert.deepStrictEqual(pushesSince(mark, 'scale:closed'), [], 'and nothing was restarted');
+
+  // The replacement window is the one main.js now pushes at; prove it, because
+  // every later test depends on it.
+  const mark2 = pushed.length;
+  const r = await call('scale:measure', H.PROFILE);
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.ok(pushesSince(mark2, 'scale:progress').length > 0,
+    'progress reaches the window that replaced the closed one');
 });
 
 // In a packaged app the scale cannot live inside app.asar: Python cannot read a
 // script out of an archive and an interpreter cannot be spawned from one. If
 // this resolved to the asar path the installed app would start, show its window,
 // and fail every measurement with a file-not-found.
-test('INT-ELEC-20  the packaged app looks for the scale beside the archive, not inside it', async () => {
+test('INT-ELEC-22  the packaged app looks for the scale beside the archive, not inside it', async () => {
   const dev = path.join(EXAMPLE, '..');
   assert.strictEqual(BodyScaleClient.resolveScaleDir({ isPackaged: false }, dev), dev,
     'development runs from the checkout');
@@ -622,6 +687,8 @@ test('INT-ELEC-20  the packaged app looks for the scale beside the archive, not 
   assert.strictEqual(fs.existsSync(path.join(dev, 'scale.js')), true,
     'that development path really does hold scale.js');
 
+  // resolveScaleDir dereferences process.resourcesPath, which only Electron
+  // defines, so it has to be supplied and then taken away again.
   const had = Object.prototype.hasOwnProperty.call(process, 'resourcesPath');
   const previous = process.resourcesPath;
   process.resourcesPath = path.join(path.sep, 'opt', 'BodyScale', 'resources');
@@ -642,12 +709,18 @@ test('INT-ELEC-20  the packaged app looks for the scale beside the archive, not 
 // saved address stopped matching after a Windows re-pair. If it only cleared
 // memory and not the file, the stale address would come back on the next launch
 // and every measurement would keep failing to find a device.
-test('INT-ELEC-21  scale:forget clears the remembered device from status and from disk', async () => {
+test('INT-ELEC-23  scale:forget clears the remembered device from status and from disk', async () => {
   await boot();
+  // Measure first, so this test owns the state it asserts on rather than
+  // inheriting whatever the seeded config happened to hold.
+  const measured = await call('scale:measure', H.PROFILE);
+  assert.strictEqual(measured.ok, true, JSON.stringify(measured));
+
   const before = await call('scale:status');
   assert.ok(before.status.device && before.status.device.address,
     'a device is remembered to begin with: ' + JSON.stringify(before.status.device));
-  assert.ok(readConfigFile()[ADDRESS_KEY], 'and it is on disk');
+  assert.strictEqual(readConfigFile()[ADDRESS_KEY], before.status.device.address,
+    'and it is on disk');
 
   const r = await call('scale:forget');
   assert.deepStrictEqual(r, { ok: true });
@@ -659,13 +732,14 @@ test('INT-ELEC-21  scale:forget clears the remembered device from status and fro
   const cfg = readConfigFile();
   assert.strictEqual(ADDRESS_KEY in cfg, false, 'and the address is gone from the file');
   assert.strictEqual('profile' in cfg, false, 'forget did not resurrect a profile either');
+  assert.strictEqual(cfg.name, H.EXPECTED.name, 'the scale\'s name is all that is left');
 });
 
 // The child MUST die with the app. before-quit is the only place early enough to
 // close the pipe cleanly; skipping it, or quitting without waiting, orphans the
 // Python helper, which goes on holding the Bluetooth radio until the machine is
 // rebooted and makes the next launch fail to find the scale at all.
-test('INT-ELEC-22  before-quit defers the quit, stops the service, and says so once', async () => {
+test('INT-ELEC-24  before-quit defers the quit, stops the service, and says so once', async () => {
   await boot();
   const running = await call('scale:status');
   assert.strictEqual(running.ok, true, 'the service is up before the quit');
@@ -693,12 +767,23 @@ test('INT-ELEC-22  before-quit defers the quit, stops the service, and says so o
 // answer with a code, rather than hanging: a renderer left holding a promise
 // that never settles shows a spinner that outlives the app it belongs to. And
 // nothing may respawn behind it — that is the orphan this whole path prevents.
-test('INT-ELEC-23  once the service is stopped, commands fail cleanly and nothing respawns', async () => {
+test('INT-ELEC-25  once the service is stopped, commands fail cleanly and nothing respawns', async () => {
+  await boot();
+  // In file order the test above already took the app through its quit path. Run
+  // on its own, take it there now, so this can never pass vacuously against a
+  // service that is in fact still running.
+  if ((await call('scale:status')).ok) {
+    app.emit('before-quit', { preventDefault() {} });
+    await waitFor(async () => !(await call('scale:status')).ok, 'the service to stop');
+  }
   const closedBefore = pushed.filter((p) => p.channel === 'scale:closed').length;
+  assert.ok(closedBefore > 0, 'the service really was stopped by the quit path');
 
   const measure = await call('scale:measure', H.PROFILE);
   assert.deepStrictEqual(measure,
     { ok: false, code: 'TRANSPORT_FAILED', message: 'the scale service is not running' });
+  // KNOWN DISCREPANCY: the other three guards return no message at all, so the
+  // UI has nothing to show for them. Pinned as-is, not fixed.
   for (const channel of ['scale:status', 'scale:cancel', 'scale:forget']) {
     assert.deepStrictEqual(await call(channel), { ok: false, code: 'TRANSPORT_FAILED' },
       `${channel} fails cleanly with the service gone`);
@@ -707,7 +792,7 @@ test('INT-ELEC-23  once the service is stopped, commands fail cleanly and nothin
   await sleep(1200);                     // longer than the first respawn back-off
   assert.strictEqual(pushed.filter((p) => p.channel === 'scale:closed').length, closedBefore,
     'no second service was started and closed behind our backs');
-  assert.deepStrictEqual((await call('scale:status')), { ok: false, code: 'TRANSPORT_FAILED' },
+  assert.deepStrictEqual(await call('scale:status'), { ok: false, code: 'TRANSPORT_FAILED' },
     'and the service is still down');
   assert.deepStrictEqual(pushed.filter((p) => p.channel === 'scale:error'), [],
     'the clean shutdown never looked like an error to the renderer');
