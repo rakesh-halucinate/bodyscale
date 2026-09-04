@@ -1,0 +1,1057 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Body Scale Reader</title>
+<style>
+  :root { --ink:#111; --dim:#666; --line:#ddd; --ok:#0a7d33; --warn:#a35a00; --bad:#b3261e; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 18px; color: var(--ink); background: #f6f7f9; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 10px 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+  .small { font-size: 12px; color: var(--dim); }
+  [hidden] { display: none !important; }
+  button { padding: 8px 14px; cursor: pointer; border-radius: 6px; border: 1px solid #bbb; background: #fff; font-size: 14px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #btnMeasure { font-size: 20px; font-weight: 600; padding: 20px 28px; width: 100%; background: #1668dc; color: #fff; border-color: #1668dc; }
+  #btnMeasure:disabled { background: #9bb8e4; border-color: #9bb8e4; }
+  input[type=text], input[type=number] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-family: ui-monospace, Menlo, monospace; }
+  #progress { font-size: 15px; padding: 10px 12px; border-radius: 6px; background: #eef3fb; }
+  #progress.ok { background: #e8f6ec; color: var(--ok); } #progress.bad { background: #fdecea; color: var(--bad); }
+  #progress.busy { background: #fff6e5; color: var(--warn); }
+  .big { font-size: 40px; font-weight: 700; letter-spacing: -1px; }
+  .grp { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  table.metrics { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.metrics td { padding: 5px 6px; border-bottom: 1px solid #f0f0f0; }
+  table.metrics td.v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  table.metrics td.u { color: var(--dim); width: 70px; font-weight: 400; }
+  .tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+  .tag.measured { background: #e8f6ec; color: var(--ok); }
+  .tag.lit { background: #eef3fb; color: #1a4d8f; }
+  .tag.conv { background: #fdf3e3; color: var(--warn); }
+  .note { border-left: 3px solid var(--warn); background: #fffaf0; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
+  .note.bad { border-color: var(--bad); background: #fdf2f1; }
+  #log { font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all;
+         background: #111; color: #ddd; padding: 8px; height: 300px; overflow: auto; border-radius: 6px; }
+  .t{color:#888}.ok{color:#8e8}.warn{color:#eb8}.err{color:#f77}.hex{color:#9cf}.parsed{color:#fd9}.info{color:#ddd}
+  details > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+  #env { font-size: 12px; padding: 8px; border-radius: 6px; background: #eef3fb; }
+  #env.bad { background: #fdecea; color: var(--bad); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Body Scale Reader</h1>
+<div id="env">Checking Web Bluetooth…</div>
+<div id="caps" class="card" hidden></div>
+
+<div class="card">
+  <b>Step 1 — your details</b>
+  <div class="small">Needed to turn weight and impedance into body composition. Stored in this browser only.</div>
+  <div class="row">
+    <label>sex <select id="pSex"><option value="male">male</option><option value="female">female</option></select></label>
+    <label>age <input type="number" id="pAge" value="30" min="10" max="110" style="width:60px"></label>
+    <label>height <input type="number" id="pHeight" value="170" min="100" max="230" style="width:70px"> cm</label>
+  </div>
+</div>
+
+<div class="card">
+  <b>Step 2 — your scale</b> <span class="small">optional; Measure will ask for it if you skip this</span>
+  <div class="row">
+    <button id="btnPair">Pair with scale…</button>
+    <span id="pairState" class="small">Not paired yet.</span>
+    <button id="btnForget" hidden>Forget</button>
+  </div>
+  <div id="identity" class="small"></div>
+</div>
+
+<div class="card">
+  <b>Step 3 — stand on the scale, then press this</b>
+  <div class="small">Wake the scale by stepping on it. Stand still with bare feet on the metal pads, then press.</div>
+  <div class="row" style="margin-top:10px"><button id="btnMeasure">Measure</button></div>
+  <div class="row"><button id="btnCancel" hidden>Cancel</button></div>
+  <div id="progress" style="margin-top:10px">Press Measure. It will ask for your scale the first time.</div>
+</div>
+
+<div id="results" class="card" hidden></div>
+
+<details class="card">
+  <summary>Advanced</summary>
+  <div class="row small" style="margin-top:8px">
+    <label title="Stay connected and stream everything, for debugging"><input type="checkbox" id="chkMonitor"> live monitor mode (stay connected, stream everything)</label>
+    <label>connect timeout <input type="number" id="connectWindow" value="30" min="5" max="180" style="width:55px"> s</label>
+    <label>measurement timeout <input type="number" id="measureWindow" value="45" min="10" max="300" style="width:55px"> s</label>
+  </div>
+  <div class="row small">
+    <label title="Discovery bursts between connect attempts; turn off if connecting got worse"><input type="checkbox" id="chkUseScan" checked> use active scanning</label>
+    <button id="btnDiag">Diagnostics</button>
+    <label>retry every <input type="number" id="retryInterval" value="1000" min="250" max="10000" step="250" style="width:70px"> ms</label>
+    <label>GATT op timeout <input type="number" id="opTimeout" value="5000" min="500" max="30000" step="500" style="width:70px"> ms</label>
+    <label><input type="checkbox" id="chkReadAll" checked> read every readable characteristic</label>
+  </div>
+  <div class="row small">
+    Extra service UUIDs: <input type="text" id="extraUuids" size="46" placeholder="ffb0, fff0, or a full 128-bit UUID">
+  </div>
+  <div class="row small">
+    <b>Standard BCS spec version:</b>
+    <label><input type="radio" name="ver" value="1.0.1" checked> 1.0.1</label>
+    <label><input type="radio" name="ver" value="1.0"> 1.0</label>
+    <span id="verNote"></span>
+  </div>
+
+  <div id="udsRow" hidden class="row small">
+    <b>User Data Service:</b> index <input type="text" id="udsIndex" size="3" value="1">
+    consent <input type="text" id="udsConsent" size="5" value="1234">
+    <button id="btnUdsList">List users</button>
+    <button id="btnUdsRegister">Register</button>
+    <button id="btnUdsConsent">Consent</button>
+  </div>
+  <div id="writeRow" hidden class="row small">
+    <b>Raw write:</b> <select id="writeChar"></select>
+    <input type="text" id="writeHex" size="34" placeholder="00 03 00 b0 42 …">
+    <button id="btnWrite">Write</button>
+  </div>
+
+  <h2>Log</h2>
+  <div class="row">
+    <button id="btnClear">Clear</button>
+    <button id="btnCopy">Copy</button>
+    <button id="btnDownload">Download JSON</button>
+    <span id="counts" class="small"></span>
+  </div>
+  <div id="log"></div>
+
+  <h2>Parser test without hardware</h2>
+  <div class="row small">
+    <select id="hexChar">
+      <option value="2a9c">0x2A9C Body Composition Measurement</option>
+      <option value="2a9d">0x2A9D Weight Measurement</option>
+      <option value="2a9b">0x2A9B Body Composition Feature</option>
+      <option value="2a9e">0x2A9E Weight Scale Feature</option>
+    </select>
+    <input type="text" id="hexIn" size="52" placeholder="hex bytes">
+    <button id="btnParseHex">Parse</button>
+  </div>
+  <div class="row small">Samples:
+    <button data-sample="bcmSiFull">SI full</button>
+    <button data-sample="bcmImperial">Imperial</button>
+    <button data-sample="bcmMultiPart1">Multi 1/2</button>
+    <button data-sample="bcmMultiPart2">Multi 2/2</button>
+    <button data-sample="bcmUnsuccessful">Unsuccessful</button>
+    <button data-sample="wsmSi" data-char="2a9d">Weight Meas</button>
+    <button data-sample="bcfAll" data-char="2a9b">BC Feature</button>
+  </div>
+</details>
+</div>
+
+<script src="bcs.js"></script>
+<script src="scales-db.js"></script>
+<script src="bia.js"></script>
+<script src="drivers.js"></script>
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const logEl = $('log'), entries = [];
+  let device = null, server = null, pendingMulti = null;
+  let identified = null, driver = null, driverCtx = null;
+  const chars = new Map(), subscribed = new Set(), rawPackets = [];
+  let lastMeasurementPacket = null;
+  const counts = { notifications: 0, reads: 0, writes: 0, errors: 0 };
+  let lastFrameSig = null, repeatCount = 0;
+  let capture = null, measuring = false, cancelled = false, needsRepair = false;
+  let grantedCount = null;
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ts = () => new Date().toISOString().substr(11, 12);
+  const num = (id, dflt) => { const v = parseInt($(id).value, 10); return Number.isFinite(v) ? v : dflt; };
+
+  // ---------- logging ----------
+  let lastLogKey = null, lastLogEl = null, lastLogCount = 0;
+  function log(msg, cls, data) {
+    lastLogKey = null; lastLogEl = null;
+    const el = document.createElement('div');
+    el.className = cls || 'info';
+    el.textContent = `[${ts()}] ${msg}` + (data !== undefined ? '\n    ' + (typeof data === 'string' ? data : JSON.stringify(data)) : '');
+    logEl.appendChild(el); logEl.scrollTop = logEl.scrollHeight;
+    entries.push({ t: new Date().toISOString(), level: cls || 'info', msg, data });
+    (cls === 'err' ? console.error : cls === 'warn' ? console.warn : console.log)(msg, data === undefined ? '' : data);
+    $('counts').textContent = `notifications ${counts.notifications} · reads ${counts.reads} · writes ${counts.writes} · errors ${counts.errors}`;
+  }
+  function logRepeat(key, msg, cls) {
+    if (key === lastLogKey && lastLogEl) {
+      lastLogCount++;
+      lastLogEl.textContent = `[${ts()}] ${msg}   (x${lastLogCount})`;
+      entries[entries.length - 1] = { t: new Date().toISOString(), level: cls || 'info', msg: `${msg} (x${lastLogCount})` };
+      return;
+    }
+    lastLogKey = key; lastLogCount = 1;
+    const el = document.createElement('div');
+    el.className = cls || 'info';
+    el.textContent = `[${ts()}] ${msg}`;
+    logEl.appendChild(el); logEl.scrollTop = logEl.scrollHeight;
+    lastLogEl = el;
+    entries.push({ t: new Date().toISOString(), level: cls || 'info', msg });
+    console.log(msg);
+  }
+  function progress(text, cls) { $('progress').textContent = text; $('progress').className = cls || ''; }
+
+  function withTimeout(promise, what, msOverride) {
+    const ms = msOverride || num('opTimeout', 5000);
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms); }),
+    ]).catch((e) => { throw new Error(`${what}: ${e.message || e}`); });
+  }
+
+  // ---------- profile ----------
+  const profile = () => ({ sex: $('pSex').value, age: num('pAge', 30), heightCm: num('pHeight', 170) });
+  try {
+    const saved = JSON.parse(localStorage.getItem('scaleProfile') || 'null');
+    if (saved) { $('pSex').value = saved.sex || 'male'; $('pAge').value = saved.age || 30; $('pHeight').value = saved.heightCm || 170; }
+  } catch (e) { /* storage unavailable */ }
+  ['pSex', 'pAge', 'pHeight'].forEach((id) => $(id).addEventListener('change', () => {
+    try { localStorage.setItem('scaleProfile', JSON.stringify(profile())); } catch (e) { /* ignore */ }
+  }));
+
+  // ---------- environment ----------
+  (async () => {
+    const env = $('env'), problems = [];
+    if (!('bluetooth' in navigator)) problems.push('This browser has no Web Bluetooth. Use Google Chrome or Edge. Safari and Firefox will not work.');
+    if (!window.isSecureContext) problems.push('Not a secure context. Open this over https, from a local file, or from localhost.');
+    if (problems.length) { env.className = 'bad'; env.textContent = problems.join(' '); log(problems.join(' '), 'err'); return; }
+    let avail = 'unknown';
+    try { if (navigator.bluetooth.getAvailability) avail = await navigator.bluetooth.getAvailability(); } catch (e) { avail = 'error'; }
+    const embedded = /\bClaude\/|Electron\//.test(navigator.userAgent);
+    env.textContent = `Web Bluetooth ready. Adapter: ${avail}.` + (embedded ? ' NOTE: this embedded browser has no device chooser. Open the file in Google Chrome.' : '');
+    env.className = (avail === false || embedded) ? 'bad' : '';
+    log(`Web Bluetooth OK; adapter=${avail}`, 'ok');
+    reportCapabilities();
+  })();
+
+  /*
+   * Which discovery APIs this Chrome exposes decides whether reconnecting can be
+   * automatic. gatt.connect() never scans: it can only reach a peripheral the
+   * Bluetooth stack has discovered recently. The chooser scans, which is exactly
+   * why picking the scale by hand rescues a session that retrying cannot.
+   * requestLEScan is the programmatic version of that scan, and it plus
+   * watchAdvertisements sit behind one Chrome flag.
+   */
+  function capabilities() {
+    const bt = (typeof navigator !== 'undefined' && navigator.bluetooth) || {};
+    return {
+      getDevices: typeof bt.getDevices === 'function',
+      requestLEScan: typeof bt.requestLEScan === 'function',
+      // Prefer the actual device we hold, since that is what will be called.
+      // The prototype check is only a fallback for before one is selected.
+      watchAdvertisements: (device && typeof device.watchAdvertisements === 'function')
+        || (typeof BluetoothDevice !== 'undefined' && BluetoothDevice.prototype
+            && 'watchAdvertisements' in BluetoothDevice.prototype),
+    };
+  }
+  const isFileOrigin = () => typeof location !== 'undefined' && location.protocol === 'file:';
+
+  /*
+   * Two separate things decide whether the chooser can be avoided.
+   *   1. The discovery APIs exist  -> #enable-experimental-web-platform-features
+   *   2. Chrome REMEMBERS the grant -> #enable-web-bluetooth-new-permissions-backend
+   *      and a real origin, because a permission is attached to an origin and a
+   *      file:// page does not have one that persists.
+   * Having only the first is exactly the state where getDevices() exists and
+   * always returns an empty list, so the chooser reappears on every reload.
+   */
+  function reportCapabilities() {
+    const c = capabilities();
+    const missing = Object.entries(c).filter(([, v]) => !v).map(([k]) => k);
+    log(`Discovery APIs: getDevices=${c.getDevices}, requestLEScan=${c.requestLEScan}, watchAdvertisements=${c.watchAdvertisements}`, 'info');
+
+    const onFile = isFileOrigin();
+    const grantsNotSticking = c.getDevices && grantedCount === 0;
+    if (!missing.length && !onFile && !grantsNotSticking) { $('caps').hidden = true; return; }
+
+    let title, body = '';
+    if (onFile) {
+      title = 'Opened as a file, so the chooser cannot be avoided';
+      body = `<div class="small" style="margin-top:6px">Chrome attaches a Bluetooth permission to an <b>origin</b>. `
+        + `A <code>file://</code> page has no origin that persists, so the grant is thrown away on every reload and `
+        + `<code>getDevices()</code> comes back empty. That is why the chooser keeps appearing.</div>`
+        + `<div class="small" style="margin-top:8px"><b>Fix, once:</b> double-click <code>start.command</code> in the `
+        + `project folder. It serves the page at <code>http://localhost:8777</code>, which is a real origin and a secure `
+        + `context, so Chrome remembers your scale and the chooser stops appearing.</div>`;
+    } else if (grantsNotSticking) {
+      title = 'Chrome is not remembering your scale';
+      body = `<div class="small" style="margin-top:6px"><code>getDevices()</code> works but returns nothing, which means `
+        + `persistent Bluetooth permissions are switched off. That setting is a <b>second</b> flag, separate from the one `
+        + `that provides the scanning APIs.</div>`;
+    } else {
+      title = 'Reconnecting needs a Chrome flag';
+      body = `<div class="small" style="margin-top:6px">This Chrome is missing: <b>${missing.join(', ')}</b>. `
+        + `Without a scanning API a page cannot re-discover a scale that has gone quiet, and <code>gatt.connect()</code> `
+        + `keeps failing even while the scale is visible in Chrome's own chooser.</div>`;
+    }
+
+    $('caps').hidden = false;
+    $('caps').innerHTML = `<b>${title}</b>${body}`
+      + `<div class="small" style="margin-top:8px">Both of these should be <b>Enabled</b>, then <b>Relaunch</b>:</div>`
+      + `<ul class="small"><li><code>chrome://flags/#enable-experimental-web-platform-features</code>`
+      + ` gives the page the scanning APIs</li>`
+      + `<li><code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code>`
+      + ` makes Chrome remember your scale between page loads</li></ul>`
+      + `<div class="small">Chrome will not let a page open a <code>chrome://</code> address, so paste them in yourself. `
+      + `Until this is sorted Measure still works, it just asks you to pick the scale each time.</div>`;
+    log(`${title}. Flags needed: enable-experimental-web-platform-features and enable-web-bluetooth-new-permissions-backend.`, 'warn');
+  }
+  function capsSummary() {
+    const c = capabilities();
+    return `getDevices=${c.getDevices} requestLEScan=${c.requestLEScan} watchAdvertisements=${c.watchAdvertisements}`;
+  }
+
+  // ---------- spec version ----------
+  function renderVersionNote() {
+    const sel = document.querySelector('input[name=ver]:checked');
+    const v = BCS.VERSIONS[sel ? sel.value : '1.0.1'];
+    $('verNote').textContent = v ? v.label : '';
+  }
+  const version = () => { const s = document.querySelector('input[name=ver]:checked'); return s ? s.value : '1.0.1'; };
+  document.querySelectorAll('input[name=ver]').forEach((r) => r.addEventListener('change', () => {
+    renderVersionNote();
+    log(`Spec version set to ${version()}. The byte layout is identical in both, so no decoded number changes.`, 'info');
+  }));
+  renderVersionNote();
+
+  // ---------- services ----------
+  const extraServices = () => $('extraUuids').value.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+    .map((s) => (/^(0x)?[0-9a-f]{1,4}$/.test(s) ? parseInt(s.replace(/^0x/, ''), 16) : s));
+  const optionalServices = () => Array.from(new Set([...ScalesDB.optionalServices(), ...extraServices()]));
+
+  // ---------- pairing ----------
+  function adopt(d, how) {
+    device = d;
+    needsRepair = false;
+    identified = ScalesDB.identify(device.name, []);
+    device.removeEventListener('gattserverdisconnected', onDisconnected);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    try {
+      localStorage.setItem('scaleDeviceId', device.id);
+      if (device.name) localStorage.setItem('scaleDeviceName', device.name);
+    } catch (e) { /* ignore */ }
+    log(`Scale ready: "${device.name || '(no name)'}" (${how})`, 'ok');
+    $('pairState').textContent = `Paired: ${device.name || device.id}`;
+    $('btnForget').hidden = false;
+    $('btnMeasure').disabled = false;
+    reportIdentity();
+    // Capabilities are partly a property of the device object, so re-evaluate
+    // now that we hold one rather than leaving a stale banner up.
+    reportCapabilities();
+  }
+
+  /*
+   * getDevices() hands back scales this origin has already been granted, with no
+   * chooser and no user gesture. It is how a paired scale survives a page reload.
+   * Chrome exposes it only with the new permissions backend enabled, so absence
+   * is normal and simply means the chooser is needed once per page load.
+   */
+  function savedPref(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+  /** Pick our scale out of the granted list without ever guessing wildly. */
+  function pickKnown(known) {
+    const id = savedPref('scaleDeviceId'), name = savedPref('scaleDeviceName');
+    return known.find((d) => d.id === id)
+      || (name ? known.find((d) => d.name === name) : null)
+      || known.find((d) => ScalesDB.identify(d.name, []).family !== 'unknown')
+      || (known.length === 1 ? known[0] : null);
+  }
+
+  async function restoreDevice() {
+    if (device) return true;
+    if (!('bluetooth' in navigator) || typeof navigator.bluetooth.getDevices !== 'function') return false;
+    try {
+      const known = await navigator.bluetooth.getDevices();
+      grantedCount = known.length;
+      if (!known.length) {
+        log('getDevices returned an empty list: Chrome is not remembering any scale for this page.', 'warn');
+        reportCapabilities();
+        return false;
+      }
+      log(`getDevices returned ${known.length} granted device(s): ${known.map((d) => d.name || d.id).join(', ')}`, 'info');
+      const match = pickKnown(known);
+      if (!match) { log('None of them is recognisably the scale, so leaving the choice to you.', 'info'); return false; }
+      adopt(match, 'restored without a chooser');
+      progress('Scale restored. Stand on it, then press Measure.', 'ok');
+      return true;
+    } catch (e) {
+      log(`getDevices failed: ${e.name}: ${e.message}`, 'info');
+      return false;
+    }
+  }
+
+  /*
+   * After a run of failed connects, the device handle itself can be the problem
+   * rather than the scale. Asking getDevices() for a fresh handle to the same
+   * scale costs nothing and needs no chooser, so it is worth trying before
+   * making the user pick from a list again.
+   */
+  async function refreshDeviceHandle() {
+    if (!('bluetooth' in navigator) || typeof navigator.bluetooth.getDevices !== 'function') return false;
+    const wanted = device ? device.id : null;
+    try {
+      const known = await navigator.bluetooth.getDevices();
+      const match = known.find((d) => d.id === wanted) || pickKnown(known);
+      if (!match) return false;
+      const isNewObject = match !== device;
+      adopt(match, isNewObject ? 'fresh handle from getDevices' : 'same handle from getDevices');
+      log(isNewObject ? 'Got a fresh handle to the scale without a chooser.' : 'getDevices returned the same handle.', 'info');
+      return isNewObject;
+    } catch (e) {
+      log(`getDevices refresh failed: ${e.name}: ${e.message}`, 'info');
+      return false;
+    }
+  }
+
+  /** Shows Chrome's chooser. Must be called from a user gesture. */
+  async function pair(opts) {
+    if (!('bluetooth' in navigator)) { progress('This browser cannot do Bluetooth. Use Chrome.', 'bad'); return false; }
+    const o = opts || {};
+    if (!o.quiet) progress('Pick your scale in the chooser…', 'busy');
+    try {
+      const d = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: optionalServices() });
+      adopt(d, 'chosen from the chooser');
+      progress('Ready. Stand on the scale, then press Measure.', 'ok');
+      return true;
+    } catch (e) {
+      counts.errors++;
+      const hint = e.name === 'NotFoundError' ? ' Step on the scale to wake it, then press Measure again.' : '';
+      log(`Chooser cancelled or failed: ${e.name}: ${e.message}`, 'warn');
+      progress('No scale selected.' + hint, 'bad');
+      return false;
+    }
+  }
+
+  function forget() {
+    if (device && device.gatt.connected) { try { device.gatt.disconnect(); } catch (e) { /* ignore */ } }
+    device = null; identified = null; needsRepair = false;
+    try { localStorage.removeItem('scaleDeviceId'); } catch (e) { /* ignore */ }
+    $('pairState').textContent = 'Not paired yet.';
+    $('btnForget').hidden = true;
+    $('identity').textContent = '';
+    progress('Press Measure and pick your scale.');
+    log('Forgot the paired scale.', 'info');
+  }
+  function reportIdentity() {
+    if (!identified) { $('identity').textContent = ''; return; }
+    const f = identified.familyInfo;
+    $('identity').innerHTML = `<b>${identified.model || identified.name}</b> — ${f.label}`;
+    log(`Device database: ${identified.model || 'not in the database'} — ${f.label} (matched by ${identified.matchedBy || 'nothing'})`,
+      identified.family === 'standard' ? 'ok' : 'info');
+  }
+
+  // ---------- connection ----------
+  /*
+   * Cheaper discovery when requestLEScan is unavailable: watch just this device
+   * for an advertisement, then stop watching before any connect is attempted.
+   */
+  let watching = false;
+  async function watchBurst(budgetMs) {
+    if (watching || !device || typeof device.watchAdvertisements !== 'function') return false;
+    let onAdv = null, ac = null, seen = false;
+    try {
+      watching = true;
+      try { ac = new AbortController(); await device.watchAdvertisements({ signal: ac.signal }); }
+      catch (inner) { ac = null; await device.watchAdvertisements(); }
+      seen = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), budgetMs);
+        onAdv = () => { clearTimeout(timer); resolve(true); };
+        device.addEventListener('advertisementreceived', onAdv);
+      });
+    } catch (e) {
+      logRepeat('watchfail', `watchAdvertisements failed: ${e.name}: ${e.message}`, 'info');
+    } finally {
+      if (onAdv) device.removeEventListener('advertisementreceived', onAdv);
+      try { if (ac) ac.abort(); } catch (e) { /* ignore */ }
+      watching = false;
+    }
+    if (seen) log('The scale advertised. Watch stopped; connecting now.', 'ok');
+    return seen;
+  }
+
+  /*
+   * Acquiring the link.
+   *
+   * gatt.connect() never scans. It can only reach a peripheral the Bluetooth
+   * stack already knows is there, which is why it fails while the scale's radio
+   * is asleep and then succeeds the moment the scale starts advertising again.
+   * watchAdvertisements() is the API that tells us when that moment arrives, so
+   * we use it when Chrome exposes it and fall back to steady retrying when not.
+   */
+  /*
+   * Discovery burst. Runs a scan, waits until this scale advertises, then STOPS
+   * the scan before returning. Scanning and connecting must never overlap: an
+   * active scan keeps the radio busy and competes with the connection attempt,
+   * which makes connecting slower or impossible rather than easier.
+   */
+  async function discoverBurst(budgetMs) {
+    if (!$('chkUseScan').checked) return false;
+    const bt = navigator.bluetooth;
+    if (typeof bt.requestLEScan !== 'function') return watchBurst(budgetMs);
+    let scan = null, onAdv = null, seen = false;
+    try {
+      scan = await withTimeout(bt.requestLEScan({ acceptAllAdvertisements: true, keepRepeatedDevices: true }),
+        'requestLEScan', 4000);
+    } catch (e) {
+      const why = /gesture/i.test(e.message) ? ' (needs a fresh click; it will be tried on your next press)' : '';
+      logRepeat('scanfail', `could not start a scan: ${String(e.message).replace(/^requestLEScan: /, '')}${why}`, 'info');
+      return false;
+    }
+    try {
+      seen = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), budgetMs);
+        onAdv = (ev) => {
+          if (!ev.device || ev.device.id !== device.id) return;
+          clearTimeout(timer); resolve(true);
+        };
+        bt.addEventListener('advertisementreceived', onAdv);
+      });
+    } finally {
+      if (onAdv) bt.removeEventListener('advertisementreceived', onAdv);
+      try { scan.stop(); } catch (e) { /* already stopped */ }
+    }
+    if (seen) log('Scan saw the scale advertising. Scan stopped; connecting now.', 'ok');
+    return seen;
+  }
+
+  /*
+   * Cheaper discovery when requestLEScan is unavailable: watch just this device
+   * for an advertisement, then stop watching before any connect is attempted.
+   */
+  /*
+   * Acquiring the link.
+   *
+   * gatt.connect() never scans. It can only reach a peripheral the Bluetooth
+   * stack has discovered recently, which is why it fails on a quiet scale that
+   * Chrome's own chooser can still see. So plain connect attempts are
+   * interleaved with short discovery bursts, and the two never run at once.
+   */
+  async function acquireLink(windowMs) {
+    const deadline = Date.now() + windowMs;
+    let attempt = 0, everSeen = false;
+    const canScan = $('chkUseScan').checked
+      && (typeof navigator.bluetooth.requestLEScan === 'function' || typeof device.watchAdvertisements === 'function');
+    log(canScan ? 'Acquiring: connect attempts interleaved with short discovery scans.'
+                : 'Acquiring: plain connect attempts only (no scanning API, or scanning turned off).', 'info');
+
+    while (Date.now() < deadline && !cancelled) {
+      attempt++;
+      if (device.gatt.connected) { log(`Link already up (attempt ${attempt}).`, 'ok'); return true; }
+      const left = Math.ceil((deadline - Date.now()) / 1000);
+      progress(`Reaching the scale… attempt ${attempt}, ${left}s left. Stay standing on it.`, 'busy');
+      try {
+        server = await withTimeout(device.gatt.connect(), 'connect', Math.max(2500, num('retryInterval', 1000) * 3));
+        log(`GATT connected after ${attempt} attempt(s).`, 'ok');
+        return true;
+      } catch (e) {
+        logRepeat('conn', `connect attempt ${attempt}: ${String(e.message).replace(/^connect: /, '')}`, 'warn');
+      }
+      if (cancelled || Date.now() >= deadline) break;
+      // Every third failure, spend the time scanning instead of sleeping.
+      if (canScan && attempt % 3 === 0) {
+        const seen = await discoverBurst(Math.min(3000, Math.max(1000, deadline - Date.now())));
+        if (seen) everSeen = true;
+      } else {
+        await sleep(num('retryInterval', 1000));
+      }
+    }
+
+    if (device && device.gatt.connected) return true;
+    if (everSeen) log('The scale WAS advertising, yet the connection still failed. That points at a stale device handle rather than a sleeping scale.', 'warn');
+    else if (!canScan) log('No scanning was possible, so there is no way to tell whether the scale was advertising.', 'warn');
+    else log('The scale never advertised during the whole window, so its radio was asleep the entire time.', 'warn');
+    return false;
+  }
+
+  async function enumerate() {
+    chars.clear(); subscribed.clear();
+    let services = [];
+    try { services = await withTimeout(server.getPrimaryServices(), 'getPrimaryServices'); }
+    catch (e) { counts.errors++; log(`getPrimaryServices failed: ${e.message}`, 'err'); return; }
+    log(`${services.length} primary service(s):`, 'ok');
+    for (const svc of services) {
+      const s16 = BCS.uuid16(svc.uuid);
+      log(`  service ${svc.uuid} (${BCS.nameOf(svc.uuid)})`, 'info');
+      let list = [];
+      try { list = await withTimeout(svc.getCharacteristics(), `getCharacteristics ${svc.uuid}`); }
+      catch (e) { counts.errors++; log(`    getCharacteristics failed: ${e.message}`, 'warn'); continue; }
+      for (const ch of list) {
+        const p = ch.properties;
+        const props = ['broadcast','read','writeWithoutResponse','write','notify','indicate','authenticatedSignedWrites','reliableWrite','writableAuxiliaries'].filter((k) => p[k]).join('|');
+        log(`    char ${ch.uuid} (${BCS.nameOf(ch.uuid)}) props=${props || 'none'}`, 'info');
+        const c16 = BCS.uuid16(ch.uuid);
+        if (c16 !== null) { chars.set(c16, ch); if (s16 !== null) chars.set(s16 + '/' + c16, ch); }
+        chars.set(ch.uuid, ch);
+        if (p.read && $('chkReadAll').checked) {
+          try {
+            const v = await withTimeout(ch.readValue(), `readValue ${ch.uuid}`);
+            counts.reads++;
+            const bytes = BCS.toBytes(v);
+            log(`      READ ${bytes.length}B: ${BCS.hex(bytes)}`, 'hex');
+            const parsed = BCS.parseByUuid(ch.uuid, bytes, { version: version() });
+            if (parsed) log('      parsed:', 'parsed', parsed.values);
+          } catch (e) {
+            counts.errors++;
+            const enc = /security|authentication|encrypt|not permitted|authorized/i.test(e.message);
+            log(`      readValue failed: ${e.message}${enc ? ' (needs pairing; accept the macOS prompt)' : ''}`, 'warn');
+          }
+        }
+      }
+    }
+    populateWriteTargets();
+    const before = identified && identified.family;
+    identified = ScalesDB.identify(device.name, services.map((s) => s.uuid));
+    if (identified.family !== before) reportIdentity();
+    $('udsRow').hidden = !chars.has(0x2a9f);
+  }
+
+  async function runDriver() {
+    driver = Drivers.select(identified);
+    driverCtx = makeCtx();
+    log(`Driver: ${driver.label}`, 'ok');
+    try { await driver.init(driverCtx); } catch (e) { counts.errors++; log(`driver init failed: ${e.message}`, 'err'); }
+    if (driver.id !== 'generic') await driverCtx.subscribeAll();
+    if (!subscribed.size) log('Nothing is subscribable on this device. It cannot push data.', 'err');
+  }
+
+  function makeCtx() {
+    return {
+      log, profile, scalesDb: ScalesDB, state: {}, now: () => Date.now(), hex: BCS.hex,
+      async subscribe(svc16, chr16) {
+        const ch = chars.get(svc16 + '/' + chr16) || chars.get(chr16);
+        if (!ch) { log(`  cannot subscribe: 0x${chr16.toString(16)} not present`, 'warn'); return false; }
+        if (subscribed.has(ch.uuid)) return true;
+        try {
+          await withTimeout(ch.startNotifications(), `startNotifications 0x${chr16.toString(16)}`);
+          ch.addEventListener('characteristicvaluechanged', onValue);
+          subscribed.add(ch.uuid);
+          log(`  subscribed to 0x${chr16.toString(16)} (${BCS.nameOf(ch.uuid)})`, 'ok');
+          return true;
+        } catch (e) { counts.errors++; log(`  startNotifications 0x${chr16.toString(16)} failed: ${e.message}`, 'warn'); return false; }
+      },
+      async subscribeAll() {
+        for (const [key, ch] of chars) {
+          if (typeof key !== 'number') continue;
+          if (!ch.properties.notify && !ch.properties.indicate) continue;
+          if (subscribed.has(ch.uuid)) continue;
+          try {
+            await withTimeout(ch.startNotifications(), `startNotifications ${ch.uuid}`);
+            ch.addEventListener('characteristicvaluechanged', onValue);
+            subscribed.add(ch.uuid);
+            log(`  subscribed to ${ch.uuid} (${BCS.nameOf(ch.uuid)})`, 'ok');
+          } catch (e) { counts.errors++; log(`  startNotifications ${ch.uuid} failed: ${e.message}`, 'warn'); }
+        }
+      },
+      async write(svc16, chr16, bytes, what) {
+        const ch = chars.get(svc16 + '/' + chr16) || chars.get(chr16);
+        if (!ch) { log(`  cannot write ${what}: 0x${chr16.toString(16)} not present`, 'warn'); return false; }
+        return doWrite(ch, bytes, what);
+      },
+    };
+  }
+
+  async function doWrite(ch, bytes, what) {
+    const b = BCS.toBytes(bytes);
+    try {
+      if (ch.properties.write && ch.writeValueWithResponse) await withTimeout(ch.writeValueWithResponse(b), `write ${what}`);
+      else if (ch.properties.writeWithoutResponse && ch.writeValueWithoutResponse) await withTimeout(ch.writeValueWithoutResponse(b), `write ${what}`);
+      else await withTimeout(ch.writeValue(b), `write ${what}`);
+      counts.writes++; log(`  wrote ${what}: ${BCS.hex(b)}`, 'ok'); return true;
+    } catch (e) { counts.errors++; log(`  write ${what} failed: ${e.message}`, 'warn'); return false; }
+  }
+
+  function onDisconnected() {
+    subscribed.clear(); chars.clear();
+    $('udsRow').hidden = true; $('writeRow').hidden = true;
+    log('GATT disconnected.', 'warn');
+    if (capture && !capture.settled) capture.disconnected = true;
+    if (!measuring && $('chkMonitor').checked && device) monitorLoop();
+  }
+
+  // ---------- the measurement ----------
+  function newCapture() {
+    return { weight: null, impedance: null, finalSeen: false, settled: false, disconnected: false,
+             resolve: null, promise: null, graceTimer: null, frames: 0 };
+  }
+
+  function feedCapture(values, isFinal) {
+    if (!capture || capture.settled || !values) return;
+    capture.frames++;
+    if (values.weight > 0) capture.weight = values.weight;
+    if (values.impedanceOhm > 0) capture.impedance = values.impedanceOhm;
+    if (isFinal || values.state === 'final') capture.finalSeen = true;
+
+    if (capture.weight > 0) {
+      progress(`Reading: ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} Ω` : ''}${capture.finalSeen ? ' — settled' : ' — hold still…'}`, 'busy');
+    }
+    // A record frame carrying both numbers is the complete measurement.
+    if (capture.weight > 0 && capture.impedance > 0) return finishCapture('got weight and impedance');
+    // Weight settled but no impedance yet: give it a moment, then take what we have.
+    if (capture.finalSeen && capture.weight > 0 && !capture.graceTimer) {
+      capture.graceTimer = setTimeout(() => finishCapture('weight settled, no impedance arrived'), 5000);
+    }
+  }
+  function finishCapture(reason) {
+    if (!capture || capture.settled) return;
+    capture.settled = true;
+    if (capture.graceTimer) clearTimeout(capture.graceTimer);
+    log(`Measurement captured (${reason}).`, 'ok');
+    if (capture.resolve) capture.resolve(capture);
+  }
+
+  async function measure() {
+    if (measuring) return;
+    /*
+     * Anything needing the click's user activation has to happen before the
+     * first long await, because that activation expires in a few seconds.
+     * So if there is no scale, or the last attempt exhausted its window, open
+     * the chooser right now off this very click rather than making the user
+     * find the Pair button themselves.
+     */
+    if (!device) {
+      if (!(await restoreDevice())) {
+        log(isFileOrigin()
+          ? 'No remembered scale, because a file:// page cannot keep a Bluetooth grant. Opening the chooser. Run start.command to stop this happening.'
+          : 'No remembered scale, so opening the chooser from this click.', 'info');
+        if (!(await pair({ quiet: true }))) return;
+      }
+    } else if (needsRepair) {
+      progress('Re-acquiring your scale…', 'busy');
+      // Silent recovery first. The chooser is a last resort, never routine.
+      const refreshed = await refreshDeviceHandle();
+      if (!refreshed && !capabilities().getDevices) {
+        log('No silent way to re-acquire this scale in this Chrome, so opening the chooser from this click.', 'info');
+        if (!(await pair({ quiet: true }))) { needsRepair = false; return; }
+      } else if (!refreshed) {
+        log('Reusing the remembered scale and retrying silently. No chooser.', 'info');
+      }
+      needsRepair = false;
+    }
+    measuring = true; cancelled = false;
+    $('btnMeasure').disabled = true; $('btnCancel').hidden = false; $('results').hidden = true;
+    capture = newCapture();
+    capture.promise = new Promise((res) => { capture.resolve = res; });
+
+    try {
+      progress('Reaching the scale…', 'busy');
+      const ok = await acquireLink(num('connectWindow', 30) * 1000);
+      if (cancelled) { progress('Cancelled.', ''); return; }
+      if (!ok) {
+        // Next press will go through the chooser, which makes Chrome scan.
+        needsRepair = true;
+        const c = capabilities();
+        progress(c.requestLEScan
+          ? 'Could not reach the scale. Press Measure again to retry.'
+          : 'Could not reach the scale. Press Measure again and it will open the chooser for you. To remove that step for good, enable the Chrome flag shown at the top of this page.', 'bad');
+        log('Connect window expired. The next Measure press opens the chooser automatically, because a chooser makes Chrome scan and gatt.connect never does.', 'err');
+        return;
+      }
+      await enumerate();
+      await runDriver();
+      if (cancelled) { progress('Cancelled.', ''); return; }
+
+      progress('Connected. Stand still on the scale…', 'busy');
+      const windowMs = num('measureWindow', 45) * 1000;
+      const timeout = new Promise((res) => setTimeout(() => res('timeout'), windowMs));
+      const r = await Promise.race([capture.promise, timeout]);
+
+      if (cancelled) { progress('Cancelled.', ''); return; }
+      if (r === 'timeout') {
+        if (capture.weight > 0) { finishCapture('timed out, using the best reading seen'); }
+        else {
+          progress(`No reading in ${windowMs / 1000}s. Make sure you are standing on the scale with bare feet.`, 'bad');
+          log(`Measurement timed out. Frames seen: ${capture.frames}.`, 'warn');
+          return;
+        }
+      }
+      renderResults(capture);
+    } catch (e) {
+      counts.errors++;
+      log(`Measurement failed: ${e.message}`, 'err');
+      progress(`Measurement failed: ${e.message}`, 'bad');
+    } finally {
+      measuring = false;
+      $('btnMeasure').disabled = false;
+      $('btnCancel').hidden = true;
+      if (!$('chkMonitor').checked && device && device.gatt.connected) {
+        try { device.gatt.disconnect(); log('Disconnected; the scale is free again.', 'info'); } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  function cancelMeasure() {
+    cancelled = true;
+    if (capture) capture.settled = true;
+    if (device && device.gatt.connected) { try { device.gatt.disconnect(); } catch (e) { /* ignore */ } }
+    measuring = false; $('btnMeasure').disabled = false; $('btnCancel').hidden = true;
+    progress('Cancelled.', '');
+  }
+
+  // Live monitor mode: stay connected and keep re-establishing the link.
+  let monitorRunning = false;
+  async function monitorLoop() {
+    if (monitorRunning || measuring || !device || !$('chkMonitor').checked) return;
+    monitorRunning = true;
+    log('Monitor mode: holding the link open and reconnecting whenever it drops.', 'ok');
+    while ($('chkMonitor').checked && device && !measuring) {
+      if (!device.gatt.connected) {
+        try {
+          server = await withTimeout(device.gatt.connect(), 'monitor connect', Math.max(2000, num('retryInterval', 1000) * 2));
+          log('Monitor: link re-established; re-subscribing.', 'ok');
+          await enumerate(); await runDriver();
+        } catch (e) { logRepeat('mon', `monitor reconnect: ${String(e.message).replace(/^monitor connect: /, '')}`, 'warn'); }
+      }
+      await sleep(num('retryInterval', 1000));
+    }
+    monitorRunning = false;
+    log('Monitor mode off.', 'info');
+  }
+  $('chkMonitor').addEventListener('change', () => { if ($('chkMonitor').checked) monitorLoop(); });
+
+  // ---------- notifications ----------
+  function onValue(ev) {
+    const ch = ev.target;
+    const bytes = BCS.toBytes(ch.value);
+    counts.notifications++;
+    const u16 = BCS.uuid16(ch.uuid);
+    const hex = BCS.hex(bytes);
+    rawPackets.push({ t: new Date().toISOString(), uuid: ch.uuid, hex });
+    const sig = ch.uuid + '|' + hex.slice(hex.indexOf(' ') + 1);
+    if (sig === lastFrameSig) {
+      repeatCount++;
+      if (repeatCount % 25 === 0) logRepeat('rep', `identical frame repeated ${repeatCount} times (scale holding its reading)`, 'info');
+    } else {
+      if (repeatCount > 0) log(`(previous frame repeated ${repeatCount} more time${repeatCount === 1 ? '' : 's'})`, 'info');
+      lastFrameSig = sig; repeatCount = 0;
+      log(`NOTIFY ${ch.uuid} (${BCS.nameOf(ch.uuid)}): ${bytes.length}B: ${hex}`, 'hex');
+    }
+
+    if (driver && driver.onFrame) {
+      let r = null;
+      try { r = driver.onFrame(u16, bytes, driverCtx); }
+      catch (e) { counts.errors++; log(`driver decode error: ${e.message}`, 'err'); }
+      if (r === Drivers.SUPPRESS) return;
+      if (r) {
+        log(`  ${driver.id}: ${r.characteristic}`, 'parsed', r.values);
+        (r.warnings || []).forEach((w) => log('  ⚠ ' + w, 'warn'));
+        feedCapture(r.values, r.values && r.values.state === 'final');
+        return;
+      }
+    }
+    if (u16 === 0x2a9f) { log('  User Control Point ' + decodeUcp(bytes), 'parsed'); return; }
+    const parsed = BCS.parseByUuid(ch.uuid, bytes, { version: version() });
+    if (!parsed) { decodeUnknown(bytes); return; }
+    log(`  ${parsed.characteristic}`, 'parsed', parsed.values);
+    (parsed.warnings || []).forEach((w) => log('  ⚠ ' + w, 'warn'));
+    if (u16 === 0x2a9c || u16 === 0x2a9d) {
+      lastMeasurementPacket = { uuid: ch.uuid, bytes };
+      if (u16 === 0x2a9c && parsed.multiplePacket) {
+        if (pendingMulti) {
+          const merged = BCS.mergeMultiPacket(pendingMulti, parsed); pendingMulti = null;
+          log('  merged multi-packet measurement', 'parsed', merged.values);
+          feedCapture(merged.values, true); return;
+        }
+        pendingMulti = parsed;
+        log('  first half of a multi-packet measurement; waiting for the continuation', 'info');
+      } else { pendingMulti = null; }
+      feedCapture(parsed.values, !parsed.multiplePacket);
+    }
+  }
+
+  function decodeUnknown(bytes) {
+    log('  no decoder for this frame. Heuristic guesses (guesses, not decodes):', 'warn');
+    const g = ScalesDB.guessFields(bytes);
+    if (!g.guesses.length) { log('    nothing resembling a weight, impedance or percentage', 'info'); return; }
+    g.guesses.slice(0, 8).forEach((x) => log(`    offset ${x.offset} ${x.endian} raw=${x.raw} → ${x.kind}${x.asKg !== null ? ' ' + x.asKg + ' kg' : ''}`, 'info'));
+  }
+
+  function decodeUcp(b) {
+    if (!b.length) return 'empty';
+    if (b[0] !== 0x20) return `opcode 0x${b[0].toString(16)}`;
+    const ops = { 1: 'Register New User', 2: 'Consent', 3: 'Delete User Data', 4: 'List All Users', 5: 'Delete User' };
+    const res = { 1: 'Success', 2: 'Op Code not supported', 3: 'Invalid parameter', 4: 'Operation failed', 5: 'User not authorized' };
+    let s = `response to ${ops[b[1]] || 'op 0x' + (b[1] || 0).toString(16)}: ${res[b[2]] || 'result ' + b[2]}`;
+    if (b[1] === 1 && b[2] === 1 && b.length >= 4) s += ` — new user index ${b[3]}`;
+    if (b[1] === 4 && b[2] === 1 && b.length >= 4) s += ` — ${b[3]} user(s): ${Array.from(b.slice(4)).join(',')}`;
+    return s;
+  }
+
+  // ---------- results ----------
+  function renderResults(cap) {
+    const pr = profile();
+    const bia = BIA.estimate({ weightKg: cap.weight, impedanceOhm: cap.impedance || 0,
+                               heightCm: pr.heightCm, age: pr.age, sex: pr.sex });
+    const tag = (c) => c === 'measured' ? '<span class="tag measured">measured</span>'
+      : c === 'derived-literature' ? '<span class="tag lit">derived</span>'
+      : '<span class="tag conv">convention</span>';
+    const suspect = bia.unreliable;
+
+    let html = `<div class="small">Measured ${new Date().toLocaleString()}</div>`;
+    html += `<div class="big">${cap.weight} kg</div>`;
+
+    // Lead with whichever body fat figure is actually defensible.
+    const recKey = bia.values.bodyFatRecommendedKey;
+    if (recKey && bia.values[recKey] !== undefined) {
+      const via = recKey === 'bodyFatPercent' ? 'from impedance' : 'from BMI, because the impedance figure did not survive checking';
+      html += `<div style="font-size:22px;font-weight:600;margin-top:4px">${bia.values[recKey]} % body fat</div>`;
+      html += `<div class="small">${via}</div>`;
+    }
+    if (!cap.impedance) {
+      html += `<div class="note">No impedance was measured, so the lean-tissue half of the panel is unavailable. `
+        + `Stand with bare feet on the metal pads and measure again.</div>`;
+    }
+
+    if (suspect) {
+      const c = bia.crossCheck || {};
+      html += `<div class="note bad"><b>The impedance half of this panel is not trustworthy in absolute terms.</b><br>`
+        + (c.gapPoints !== undefined
+          ? `Impedance says ${c.impedanceBased}% body fat. The BMI method says ${c.bmiBased}%. They differ by `
+            + `${c.gapPoints} points against a combined standard error of ${c.oneSigma}. `
+          : '')
+        + `A foot-to-foot scale reads 100 to 200 ohm lower than the hand-to-foot equipment these equations were built on, `
+        + `which inflates lean mass and collapses fat. Use the trend over weeks, not today's absolute figure.</div>`;
+    }
+
+    for (const g of BIA.GROUPS) {
+      const rows = g.keys.filter((k) => bia.values[k] !== undefined && typeof bia.values[k] !== 'object').map((k) => {
+        const m = bia.meta[k] || {};
+        const dim = suspect && g.impedance ? ' style="opacity:.5"' : '';
+        return `<tr${dim}><td>${BIA.LABELS[k] || k} ${tag(m.confidence)}</td>`
+          + `<td class="v">${bia.values[k]}</td><td class="u">${m.unit || ''}</td></tr>`;
+      }).join('');
+      if (!rows) continue;
+      const mark = suspect && g.impedance ? ' <span class="small" style="color:#b3261e">not trustworthy today</span>' : '';
+      html += `<div class="grp">${g.title}${mark}</div><table class="metrics">${rows}</table>`;
+    }
+
+    const alt = bia.values.bmrAlternatesKcal;
+    if (alt) {
+      html += '<div class="grp">Metabolic rate, other published equations</div><table class="metrics">'
+        + Object.entries(alt).map(([k, v]) => `<tr><td>${k.replace(/([A-Z])/g, ' $1').toLowerCase()}</td><td class="v">${v}</td><td class="u">kcal/day</td></tr>`).join('')
+        + '</table>';
+    }
+
+    const warns = (bia.warnings || []).filter((w) => !/not trustworthy in absolute terms/.test(w));
+    warns.forEach((w) => { html += `<div class="note">${w}</div>`; });
+
+    const omitted = Object.entries(bia.omitted || {});
+    if (omitted.length) {
+      html += `<details style="margin-top:10px"><summary class="small">Why this panel has no visceral fat rating or metabolic age (${omitted.length} omitted)</summary>`
+        + omitted.map(([k, why]) => `<div class="note"><b>${k}</b><br>${why}</div>`).join('') + '</details>';
+    }
+
+    html += `<div class="small" style="margin-top:10px">`
+      + `<span class="tag measured">measured</span> the scale sent it · `
+      + `<span class="tag lit">derived</span> published equation · `
+      + `<span class="tag conv">convention</span> what scale makers do, with no literature behind it</div>`;
+
+    $('results').innerHTML = html;
+    $('results').hidden = false;
+    progress(`Done. ${cap.weight} kg${cap.impedance ? `, ${cap.impedance} Ω` : ''}. Press Measure again for another reading.`, 'ok');
+    log('Result panel rendered.', 'ok', { trustworthy: bia.trust.impedanceDerived, flags: bia.flags.map((f) => f.rule + ':' + f.severity) });
+  }
+
+  // ---------- misc panels ----------
+  function populateWriteTargets() {
+    const sel = $('writeChar'); sel.innerHTML = ''; let n = 0;
+    for (const [key, ch] of chars) {
+      if (typeof key !== 'string' || !key.includes('-')) continue;
+      if (!ch.properties.write && !ch.properties.writeWithoutResponse) continue;
+      const o = document.createElement('option');
+      o.value = ch.uuid; o.textContent = `${ch.uuid} (${BCS.nameOf(ch.uuid)})`;
+      sel.appendChild(o); n++;
+    }
+    $('writeRow').hidden = n === 0;
+  }
+
+  function parseHex(hexStr, charSel) {
+    let bytes;
+    try { bytes = BCS.hexToBytes(hexStr); } catch (e) { log('Bad hex: ' + e.message, 'err'); return; }
+    const parsed = BCS.parseByUuid(charSel, bytes, { version: version() });
+    log(`TEST parse ${bytes.length}B as ${BCS.nameOf(charSel)} (spec ${version()}): ${BCS.hex(bytes)}`, 'hex');
+    log('  values:', 'parsed', parsed.values);
+    (parsed.warnings || []).forEach((w) => log('  ⚠ ' + w, 'warn'));
+    const u = BCS.uuid16(charSel);
+    if ((u === 0x2a9c || u === 0x2a9d) && parsed.values.weight > 0) {
+      renderResults({ weight: parsed.values.weight, impedance: parsed.values.impedanceOhm || null });
+    }
+  }
+
+  // ---------- wiring ----------
+  $('btnPair').onclick = pair;
+  $('btnForget').onclick = forget;
+  $('btnMeasure').onclick = measure;
+  $('btnCancel').onclick = cancelMeasure;
+  $('btnClear').onclick = () => { logEl.textContent = ''; entries.length = 0; lastLogEl = null; lastLogKey = null; };
+  $('btnCopy').onclick = () => navigator.clipboard.writeText(entries.map((e) => `${e.t} ${e.level} ${e.msg}${e.data !== undefined ? ' ' + JSON.stringify(e.data) : ''}`).join('\n')).then(() => log('Log copied.', 'ok'));
+  $('btnDownload').onclick = () => {
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), device: device ? { name: device.name, id: device.id } : null,
+      identified, driver: driver && driver.id, profile: profile(), rawPackets, entries }, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'scale-log.json'; a.click();
+  };
+  $('btnDiag').onclick = async () => {
+    const c = capabilities();
+    log('--- diagnostics ---', 'ok');
+    log(`user agent: ${navigator.userAgent}`, 'info');
+    const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : 'file://';
+    log(`secure context: ${window.isSecureContext} · origin: ${origin}`, 'info');
+    try { log(`adapter available: ${await navigator.bluetooth.getAvailability()}`, 'info'); } catch (e) { log(`getAvailability failed: ${e.message}`, 'warn'); }
+    log(`getDevices=${c.getDevices} requestLEScan=${c.requestLEScan} watchAdvertisements=${c.watchAdvertisements}`, 'info');
+    log(`scanning enabled in this page: ${$('chkUseScan').checked}`, 'info');
+    if (device) {
+      log(`current device: "${device.name || '(no name)'}" id=${device.id} connected=${device.gatt.connected}`, 'info');
+    } else { log('no device selected', 'info'); }
+    if (c.getDevices) {
+      try {
+        const known = await navigator.bluetooth.getDevices();
+        log(`granted devices (${known.length}):`, 'info');
+        known.forEach((d) => log(`   "${d.name || '(no name)'}" id=${d.id}${device && d.id === device.id ? '  <- in use' : ''}`, 'info'));
+        if (known.length > 1) log('More than one granted device. If the wrong one is in use, press Forget and then Measure to pick again.', 'warn');
+      } catch (e) { log(`getDevices failed: ${e.message}`, 'warn'); }
+    }
+    log('--- end diagnostics ---', 'ok');
+    progress('Diagnostics written to the log in Advanced.', '');
+  };
+  $('btnParseHex').onclick = () => parseHex($('hexIn').value, $('hexChar').value);
+  document.querySelectorAll('button[data-sample]').forEach((b) => b.onclick = () => {
+    $('hexIn').value = BCS.SAMPLES[b.dataset.sample];
+    $('hexChar').value = b.dataset.char || '2a9c';
+    parseHex($('hexIn').value, $('hexChar').value);
+  });
+  const udsIndex = () => Math.max(0, Math.min(255, parseInt($('udsIndex').value, 10) || 0));
+  const udsConsent = () => Math.max(0, Math.min(9999, parseInt($('udsConsent').value, 10) || 0));
+  async function udsWrite(payload, what) {
+    const ch = chars.get(0x2a9f);
+    if (!ch) { log('No User Control Point on this device.', 'warn'); return; }
+    await doWrite(ch, payload, what);
+  }
+  $('btnUdsList').onclick = () => udsWrite(new Uint8Array([0x04]), 'UDS List All Users');
+  $('btnUdsRegister').onclick = () => { const c = udsConsent(); udsWrite(new Uint8Array([0x01, c & 0xff, c >> 8]), `UDS Register (consent ${c})`); };
+  $('btnUdsConsent').onclick = () => { const c = udsConsent(), i = udsIndex(); udsWrite(new Uint8Array([0x02, i, c & 0xff, c >> 8]), `UDS Consent (index ${i})`); };
+  $('btnWrite').onclick = async () => {
+    const ch = chars.get($('writeChar').value);
+    if (!ch) { log('Pick a writable characteristic.', 'warn'); return; }
+    let b; try { b = BCS.hexToBytes($('writeHex').value); } catch (e) { log('Bad hex: ' + e.message, 'err'); return; }
+    await doWrite(ch, b, 'manual write');
+  };
+
+  (async () => {
+    if (!('bluetooth' in navigator)) return;
+    const restored = await restoreDevice();
+    if (!restored) log('No previously granted scale available without a chooser. Pressing Measure will ask for it once.', 'info');
+  })();
+
+  log('Ready. Fill in your details, stand on the scale, then press Measure.', 'info');
+})();
+</script>
+</body>
+</html>

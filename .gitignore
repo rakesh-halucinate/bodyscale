@@ -1,0 +1,25 @@
+# Python virtual environment. Never commit one: a venv records an absolute path
+# to the interpreter that built it, so it is useless on any other machine. Run
+# setup-mac.sh or setup-win.ps1 to create your own.
+.venv/
+python/
+__pycache__/
+*.pyc
+
+# Built by setup-mac.sh. It carries the Bluetooth usage description macOS needs,
+# and is regenerated locally rather than shipped.
+blehost.app/
+
+# The remembered device and, in older versions, the person's profile. This is
+# personal data and a per-machine Bluetooth identifier. It belongs on the
+# machine that created it, not in the repository.
+.scale-config.json
+scale-config.json
+
+# Written by ./verify.sh on the machine it runs on, so it carries absolute paths
+# and live device identifiers.
+VERIFIED.txt
+
+node_modules/
+.DS_Store
+*.log

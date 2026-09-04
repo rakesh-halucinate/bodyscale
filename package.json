@@ -1,0 +1,20 @@
+{
+  "name": "bluetooth-bodyscale",
+  "version": "1.0.0",
+  "description": "Read a Bluetooth LE body scale from the terminal and emit JSON",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "scale": "./scale.js"
+  },
+  "scripts": {
+    "test": "node test/run-plan.js",
+    "test:integration": "node test/run-plan.js --integration",
+    "test:json": "node test/run-plan.js --json",
+    "test:raw": "node --test test/*.test.js test/integration/*.test.js",
+    "verify": "./verify.sh"
+  },
+  "allowScripts": {
+    "@abandonware/noble@1.9.2-26": true
+  }
+}

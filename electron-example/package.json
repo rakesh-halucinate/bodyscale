@@ -1,0 +1,65 @@
+{
+  "name": "bodyscale-electron-example",
+  "version": "1.0.0",
+  "description": "Minimal Electron app that reads a Dr Trust SSW533 body scale through the bodyscale service",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "start:replay": "cross-env BODYSCALE_REPLAY=../fixtures/ssw533-session.jsonl electron .",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.example.bodyscale",
+    "productName": "Body Scale",
+    "files": [
+      "main.js",
+      "preload.js",
+      "bodyscale-client.js",
+      "renderer/**"
+    ],
+    "//comment-extraResources": "Everything the service needs is copied beside the app, NOT into app.asar. Python cannot read a script out of an archive, and an interpreter cannot be spawned from one.",
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "bodyscale",
+        "filter": [
+          "scale.js",
+          "ble.py",
+          "bcs.js",
+          "bia.js",
+          "drivers.js",
+          "scales-db.js",
+          "replay.js",
+          "package.json",
+          "fixtures/**",
+          ".venv/**",
+          "python/**"
+        ]
+      }
+    ],
+    "//comment-asarUnpack": "Redundant with extraResources here, but harmless, and it saves you if you ever move the scale inside files[].",
+    "asarUnpack": [
+      "**/bodyscale/**"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "mac": {
+      "target": ["dmg"],
+      "//comment": "macOS refuses Bluetooth to any app whose Info.plist lacks this string, and kills the process rather than prompting.",
+      "extendInfo": {
+        "NSBluetoothAlwaysUsageDescription": "Connects to your body scale to read your weight."
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -1,0 +1,814 @@
+#!/usr/bin/env node
+/*
+ * scale.js — read a Bluetooth LE body scale from the terminal and print JSON.
+ *
+ * No browser, so no device chooser. That dialog is a browser security feature;
+ * a local process addresses the scale by name, learns its address on the first
+ * run, and connects straight to it every time after that.
+ *
+ *   node scale.js                 measure once, print JSON, exit
+ *   node scale.js --watch         keep measuring until interrupted
+ *   node scale.js --quiet         JSON only on stdout, progress on stderr
+ *   node scale.js --raw           also print every decoded frame
+ *   node scale.js --forget        drop the saved device and rescan by name
+ *
+ * Profile, needed to turn weight and impedance into body composition:
+ *   node scale.js --sex male --age 39 --height 180
+ * Saved after the first run, so later runs need no flags.
+ *
+ * Decoding is the same code the browser version uses, covered by the test suite.
+ */
+'use strict';
+const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+
+const BCS = require('./bcs.js');
+const ScalesDB = require('./scales-db.js');
+const BIA = require('./bia.js');
+const Drivers = require('./drivers.js');
+
+const ROOT = __dirname;
+const PKG_VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version; }
+  catch (e) { return '0.0.0'; }
+})();
+const IS_WINDOWS = process.platform === 'win32';
+
+/*
+ * The config must not live in the install directory.
+ *
+ * A packaged app puts this code under resources/, which is inside Program Files
+ * on Windows and inside a signed .app on macOS. Writing there fails for a
+ * standard user, and on macOS it invalidates the bundle signature. So the
+ * remembered device goes in the per-user data directory, and an existing config
+ * beside the script is still read, so nothing is lost on upgrade.
+ */
+function userConfigDir() {
+  if (process.env.BODYSCALE_CONFIG_DIR) return process.env.BODYSCALE_CONFIG_DIR;
+  const home = os.homedir();
+  if (IS_WINDOWS) return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'bodyscale');
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'bodyscale');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'bodyscale');
+}
+const CONFIG = path.join(userConfigDir(), 'scale-config.json');
+const LEGACY_CONFIG = path.join(ROOT, '.scale-config.json');
+
+/*
+ * Finding the interpreter differs by platform, and not cosmetically.
+ *
+ * macOS kills any process that touches CoreBluetooth from a bundle with no
+ * Bluetooth usage description, so the transport must run through the bundle
+ * setup-mac.sh builds rather than a bare interpreter.
+ *
+ * Windows has no such rule. A normal venv interpreter is fine, and bleak's WinRT
+ * backend needs nothing declared for a console application.
+ */
+/*
+ * A virtual environment is not relocatable. Its pyvenv.cfg records an absolute
+ * `home =` pointing at the base interpreter on the machine that built it, and
+ * the venv is useless anywhere else. A build that ships both .venv and an
+ * embedded runtime would otherwise prefer the broken one and fail at measure
+ * time rather than at start, so check before trusting it.
+ */
+function venvIsUsable(venvDir) {
+  try {
+    const cfg = fs.readFileSync(path.join(venvDir, 'pyvenv.cfg'), 'utf8');
+    const home = (cfg.match(/^\s*home\s*=\s*(.+)$/m) || [])[1];
+    if (!home) return true;                 // no home recorded; give it a chance
+    return fs.existsSync(home.trim());
+  } catch (e) {
+    return true;                            // no pyvenv.cfg to judge by
+  }
+}
+
+function findPython() {
+  if (process.env.BODYSCALE_PYTHON) return process.env.BODYSCALE_PYTHON;
+  const venv = path.join(ROOT, '.venv');
+  const candidates = IS_WINDOWS
+    ? [{ exe: path.join(venv, 'Scripts', 'python.exe'), venv },
+       { exe: path.join(ROOT, 'python', 'python.exe') }]   // an embedded runtime, if one is shipped
+    : [{ exe: path.join(ROOT, 'blehost') },                // the bundle that declares the usage description
+       { exe: path.join(venv, 'bin', 'python'), venv }];
+  for (const c of candidates) {
+    if (!fs.existsSync(c.exe)) continue;
+    if (c.venv && !venvIsUsable(c.venv)) {
+      // note() is not initialised yet: this runs while the module is still
+      // loading. stderr is never the data channel, so writing there is safe.
+      process.stderr.write(`ignoring ${c.exe}: its virtual environment was built on another machine\n`);
+      continue;
+    }
+    return c.exe;
+  }
+  return IS_WINDOWS ? 'python' : 'python3';
+}
+const PYTHON = findPython();
+
+/*
+ * Device identifiers are not portable. macOS gives a CoreBluetooth UUID that is
+ * specific to that Mac; Windows gives a Bluetooth MAC address. A config carried
+ * between machines must therefore key the saved address by platform, or the
+ * saved value silently never matches and every run falls back to a name scan.
+ */
+const ADDRESS_KEY = `address_${process.platform}`;
+
+/*
+ * Prove the transport works before promising the user anything.
+ *
+ * On Windows this is not paranoia. If Python is not installed, the name
+ * "python" still resolves: Windows ships an App Execution Alias at
+ * %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe which spawns successfully,
+ * prints "Python was not found; run without arguments to install from the
+ * Microsoft Store", and exits non-zero. The spawn succeeds, so an ENOENT check
+ * never fires, and the measurement fails with "no reading arrived" — telling
+ * the user to stand on a scale that was never contacted.
+ *
+ * The result is cached: the answer cannot change while the process runs.
+ */
+let TRANSPORT_CHECK = null;
+function selfTestTransport(exe) {
+  if (TRANSPORT_CHECK && TRANSPORT_CHECK.exe === exe) return TRANSPORT_CHECK;
+  const r = spawnSync(exe, [path.join(ROOT, 'ble.py'), '--selftest'],
+                      { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  const out = `${r.stdout || ''}${r.stderr || ''}`;
+  let check;
+  if (r.error) {
+    check = { ok: false, reason: 'spawn-failed', message: r.error.message };
+  } else if (/Microsoft Store|was not found; run without arguments/i.test(out) || r.status === 9009) {
+    check = { ok: false, reason: 'store-alias',
+              message: `"${exe}" is the Microsoft Store placeholder, not a Python installation. `
+                     + 'Install Python from python.org, run setup-win.ps1, or point BODYSCALE_PYTHON '
+                     + 'at a real interpreter.' };
+  } else if (r.status !== 0) {
+    let detail = (out.match(/"error":"([^"]+)"/) || [])[1] || out.trim().split('\n')[0] || `exit ${r.status}`;
+    check = { ok: false, reason: 'bleak-missing',
+              message: `the Bluetooth helper cannot run: ${detail}. Run setup-mac.sh, or setup-win.ps1 on Windows.` };
+  } else {
+    let info = {};
+    try { info = JSON.parse((out.match(/^\{.*"selftest".*\}$/m) || ['{}'])[0]); } catch (e) { /* not fatal */ }
+    check = { ok: true, bleak: info.bleak || 'unknown', python: info.python || 'unknown' };
+  }
+  check.exe = exe;
+  TRANSPORT_CHECK = check;
+  return check;
+}
+
+// ---------- arguments ----------
+function parseArgs(argv) {
+  const a = { watch: false, quiet: false, raw: false, forget: false, name: 'SSW533',
+              scanTimeout: 20, connectTimeout: 20, hold: 120 };
+  for (let i = 0; i < argv.length; i++) {
+    const k = argv[i], next = () => argv[++i];
+    if (k === '--watch') a.watch = true;
+    else if (k === '--quiet') a.quiet = true;
+    else if (k === '--raw') a.raw = true;
+    else if (k === '--forget') a.forget = true;
+    else if (k === '--name') a.name = next();
+    else if (k === '--address') a.address = next();
+    else if (k === '--sex') a.sex = next();
+    else if (k === '--age') a.age = Number(next());
+    else if (k === '--height') a.heightCm = Number(next());
+    else if (k === '--scan-timeout') a.scanTimeout = Number(next());
+    else if (k === '--connect-timeout') a.connectTimeout = Number(next());
+    else if (k === '--hold') a.hold = Number(next());
+    else if (k === '--replay') a.replay = next() || path.join(ROOT, 'fixtures', 'ssw533-session.jsonl');
+    else if (k === '--interval') a.interval = Number(next());
+    else if (k === '--repeats') a.allowRepeats = true;
+    else if (k === '--max') a.max = Number(next());
+    else if (k === '--max-attempts') a.maxAttempts = Number(next());
+    else if (k === '--serve') a.serve = true;
+    else if (k === '--python') a.python = next();
+    else if (k === '-h' || k === '--help') a.help = true;
+    else { console.error(`unknown option: ${k}`); a.help = true; a.badOption = true; }
+  }
+  return a;
+}
+
+const HELP = `read a Bluetooth LE body scale and print JSON
+
+  node scale.js                     measure once
+  node scale.js --watch             keep measuring
+  node scale.js --quiet             JSON only on stdout
+  node scale.js --raw               also print each decoded frame
+  node scale.js --forget            forget the saved device, rescan by name
+  node scale.js --replay            decode a captured session, no Bluetooth
+
+Service mode, for an Electron or other host application:
+  node scale.js --serve             newline-delimited JSON on stdin and stdout
+
+Loop mode:
+  node scale.js --watch             measure over and over until Ctrl+C
+  --interval <s>    pause between attempts, default 3
+  --repeats         report a held reading again instead of skipping it
+  --max <n>         stop after n measurements
+  --max-attempts <n>  stop after n tries, whether or not they produced a reading
+
+  --name <n>        device name to look for (default SSW533)
+  --address <a>     connect straight to this address
+  --sex male|female
+  --age <years>
+  --height <cm>
+  --scan-timeout <s>     default 20
+  --connect-timeout <s>  default 20
+  --hold <s>             give up waiting for a reading, default 120
+  --python <path>        interpreter for the Bluetooth helper
+                         (or set BODYSCALE_PYTHON)
+
+The profile is remembered in .scale-config.json after the first run.`;
+
+// ---------- config ----------
+const readConfig = () => {
+  let c = null;
+  for (const file of [CONFIG, LEGACY_CONFIG]) {           // new location wins
+    try { c = JSON.parse(fs.readFileSync(file, 'utf8')); break; } catch (e) { /* try the next */ }
+  }
+  if (!c || typeof c !== 'object') return {};
+  // Earlier versions stored one address with no platform key. Adopt it only on
+  // macOS, where it was written; a CoreBluetooth UUID means nothing elsewhere.
+  if (c.address && !c[ADDRESS_KEY] && process.platform === 'darwin') {
+    c[ADDRESS_KEY] = c.address;
+    delete c.address;                    // migrated, so the old key can go
+  }
+  // On any other platform the legacy key is left untouched. Deleting it here
+  // would erase the Mac's remembered device the first time the same config was
+  // read on Windows.
+  return c;
+};
+const writeConfig = (c) => {
+  try {
+    fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
+    fs.writeFileSync(CONFIG, JSON.stringify(c, null, 2) + '\n');
+  } catch (e) {
+    // Visible even in service mode, where this used to fail silently and cost
+    // a full scan on every launch.
+    note(`could not save config to ${CONFIG}: ${e.message}`);
+    note('the device will not be remembered, so each measurement will scan first');
+  }
+};
+
+/*
+ * QUIET silences the human commentary on the terminal. It must NOT silence
+ * service mode: there, stdout carries the protocol and stderr is the only
+ * diagnostic channel the host has. Silencing it hid the transport's own error
+ * lines, which are the only thing that names why a connection failed.
+ */
+let QUIET = false;
+let LOG_ALWAYS = false;
+const note = (msg) => { if (!QUIET || LOG_ALWAYS) process.stderr.write(msg + '\n'); };
+
+// ---------- one measurement ----------
+function measureOnce(opts) {
+  return new Promise((resolve) => {
+    const args = ['--scan-timeout', String(opts.scanTimeout), '--connect-timeout', String(opts.connectTimeout),
+                  '--hold', String(opts.hold)];
+    if (opts.name) args.push('--name', opts.name);
+    if (opts.address) args.push('--address', opts.address);
+
+    // Prove the transport can run before starting anything. A transport that
+    // cannot work must fail as a transport problem, not as a scale that would
+    // not answer, and nothing should be spawned to find that out.
+    if (!opts.replay) {
+      const check = selfTestTransport(opts.python || PYTHON);
+      if (!check.ok) {
+        note(check.message);
+        return resolve({ reason: check.reason, outcome: 'spawn-failed',
+                         capture: { weight: null, impedance: null, finalSeen: false, frames: 0, settled: false },
+                         device: null, identified: null, spawnError: check.message });
+      }
+      note(`transport ok: python ${check.python}, bleak ${check.bleak}`);
+    }
+
+    const py = opts.replay
+      ? spawn(process.execPath, [path.join(ROOT, 'replay.js'), opts.replay], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true })
+      : spawn(opts.python || PYTHON, [path.join(ROOT, 'ble.py'), ...args],
+              { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+    const rl = readline.createInterface({ input: py.stdout });
+
+    const emit = opts.onEvent || (() => {});
+    if (opts.registerChild) opts.registerChild(py);
+
+    const capture = { weight: null, impedance: null, finalSeen: false, frames: 0, settled: false };
+    let device = null, identified = null, driver = null, ctx = null, grace = null, finished = false;
+    let spawnError = null;                     // set when the interpreter itself will not start
+
+    const finish = (reason, outcome) => {
+      if (finished) return;
+      finished = true;
+      if (grace) clearTimeout(grace);
+      try { py.stdin.end(); } catch (e) { /* already closed */ }
+      setTimeout(() => killChild(py), 400);
+      resolve({ reason, outcome, capture, device, identified,
+                spawnError: spawnError ? spawnError.message : null });
+    };
+
+    const complete = (why) => {
+      if (capture.settled) return;
+      capture.settled = true;
+      note(`captured (${why})`);
+      finish('captured', 'ok');
+    };
+
+    const feed = (values) => {
+      if (!values || capture.settled) return;
+      capture.frames++;
+      if (values.weight > 0) capture.weight = values.weight;
+      if (values.impedanceOhm > 0) capture.impedance = values.impedanceOhm;
+      if (values.state === 'final') capture.finalSeen = true;
+      if (capture.weight > 0) {
+        note(`  reading ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} ohm` : ''}`
+             + `${capture.finalSeen ? ' (settled)' : ' (settling)'}`);
+        emit({ phase: capture.finalSeen ? 'settled' : 'settling', weightKg: capture.weight,
+               impedanceOhm: capture.impedance, message: `${capture.weight} kg` });
+      }
+      if (capture.weight > 0 && capture.impedance > 0) return complete('weight and impedance');
+      if (capture.finalSeen && capture.weight > 0 && !grace) {
+        grace = setTimeout(() => complete('weight settled, no impedance arrived'), 5000);
+      }
+    };
+
+    const makeCtx = () => ({
+      log: (msg, level) => { if (level !== 'info' || opts.raw) note('  ' + msg); },
+      profile: () => opts.profile,
+      scalesDb: ScalesDB,
+      state: {},
+      now: () => Date.now(),
+      hex: BCS.hex,
+      // ble.py already subscribes to everything notifiable, so there is nothing
+      // for a driver to turn on here.
+      subscribe: async () => true,
+      subscribeAll: async () => {},
+      write: async (svc, chr, bytes, what) => {
+        note(`  (write "${what}" to 0x${chr.toString(16)} not wired in the CLI; this firmware needs no handshake)`);
+        return false;
+      },
+    });
+
+    rl.on('line', (line) => {
+      let ev;
+      try { ev = JSON.parse(line); } catch (e) { return; }
+      if (ev.t === 'log') {
+        note(`  ${ev.msg}`);
+        if (/scanning/i.test(ev.msg)) emit({ phase: 'scanning', message: ev.msg });
+        else if (/advertisement/i.test(ev.msg)) emit({ phase: 'found', message: ev.msg });
+        return;
+      }
+      if (ev.t === 'device') {
+        device = { name: ev.name, address: ev.address };
+        identified = ScalesDB.identify(ev.name, []);
+        driver = Drivers.select(identified);
+        ctx = makeCtx();
+        note(`device ${ev.name} at ${ev.address}`);
+        note(`driver ${driver.label}`);
+        emit({ phase: 'connected', message: `connected to ${ev.name}`,
+               device: { name: ev.name, address: ev.address }, driver: driver.id });
+        Promise.resolve(driver.init(ctx)).catch((e) => note(`driver init failed: ${e.message}`));
+        return;
+      }
+      if (ev.t === 'services') {
+        const uuids = ev.items.map((i) => i.char);
+        identified = ScalesDB.identify(device && device.name, ev.items.map((i) => i.service));
+        if (opts.raw) ev.items.forEach((i) => note(`  ${i.service} / ${i.char} [${i.props.join(',')}]`));
+        else note(`${uuids.length} characteristic(s)`);
+        return;
+      }
+      if (ev.t === 'ready') { note('ready — stand on the scale'); emit({ phase: 'ready', message: 'stand on the scale' }); return; }
+      if (ev.t === 'frame') {
+        // hexToBytes throws on odd-length input. A malformed frame must not be
+        // able to take down a service whose contract is that errors never do.
+        let bytes;
+        try { bytes = BCS.hexToBytes(ev.hex); }
+        catch (e) { note(`skipping malformed frame ${ev.uuid}: ${e.message}`); return; }
+        const u16 = BCS.uuid16(ev.uuid);
+        if (opts.raw) note(`  frame ${ev.uuid} ${ev.hex}`);
+        if (driver && driver.onFrame) {
+          let r = null;
+          try { r = driver.onFrame(u16, bytes, ctx); }
+          catch (e) { note(`  decode error: ${e.message}`); }
+          if (r === Drivers.SUPPRESS) return;
+          if (r) {
+            if (opts.raw) note(`  ${r.characteristic}: ${JSON.stringify(r.values)}`);
+            feed(r.values);
+            return;
+          }
+        }
+        const parsed = BCS.parseByUuid(ev.uuid, bytes);
+        if (parsed && (u16 === 0x2a9c || u16 === 0x2a9d)) feed(parsed.values);
+        return;
+      }
+      if (ev.t === 'end') {
+        if (capture.weight > 0 && !capture.settled) return complete('link ended, using the best reading');
+        if (ev.detail) note(`transport: ${ev.detail}`);
+        const outcome = ev.reason === 'not-found' ? 'not-found'
+                      : ev.reason === 'permission-denied' ? 'tcc-denied'
+                      : ev.reason === 'bluetooth-unavailable' ? 'bluetooth-unavailable'
+                      : 'no-reading';
+        finish(ev.reason, outcome);
+      }
+    });
+
+    py.on('error', (e) => {
+    // The outcome, not just the reason, must say this was a spawn failure:
+    // OUTCOME_TO_ERROR keys on the outcome, and a generic 'error' there
+    // becomes INTERNAL and tells the user to stand on the scale.
+    note(`could not start the transport: ${e.message}`);
+    spawnError = e;
+    finish('spawn-failed', 'spawn-failed');
+  });
+    py.on('close', (code, signal) => {
+      if (finished) return;
+      // SIGABRT with nothing decoded is the signature of macOS refusing
+      // Bluetooth to this process tree, which it enforces by killing the child.
+      if ((signal === 'SIGABRT' || code === 134) && capture.frames === 0) {
+        return finish('tcc-denied', 'tcc-denied');
+      }
+      finish('exited', capture.weight > 0 ? 'ok' : 'no-reading');
+    });
+  });
+}
+
+/*
+ * Windows has no real SIGTERM. Node emulates kill() by terminating the process
+ * handle, which does not reach grandchildren, so a Python child that has spawned
+ * anything of its own can survive. taskkill /T covers the tree.
+ */
+function killChild(child) {
+  if (!child || child.killed || child.exitCode !== null) return;
+  const portable = () => { try { child.kill('SIGTERM'); } catch (e) { /* already gone */ } };
+  if (IS_WINDOWS) {
+    // kill() does not reach grandchildren on Windows, and the Python helper is
+    // one. An orphan keeps holding the radio, so taskkill /T is the real fix.
+    let killer;
+    try {
+      killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'],
+                     { stdio: 'ignore', windowsHide: true });
+    } catch (e) { return portable(); }
+    // spawn reports a missing taskkill asynchronously, on an emitter with no
+    // listener. Unhandled, that is an uncaught exception in the cleanup path.
+    killer.on('error', () => portable());
+    killer.on('exit', (code) => { if (code !== 0) portable(); });
+    return;
+  }
+  portable();
+}
+
+// ---------- output ----------
+function buildResult(res, profile) {
+  const cap = res.capture;
+  const bia = BIA.estimate({ weightKg: cap.weight, impedanceOhm: cap.impedance || 0,
+                             heightCm: profile.heightCm, age: profile.age, sex: profile.sex });
+  const derived = {}, units = {}, confidence = {};
+  for (const [k, v] of Object.entries(bia.values)) {
+    if (k === 'weightKg' || k === 'impedanceOhm' || typeof v === 'object') continue;
+    derived[k] = v;
+    const m = bia.meta[k] || {};
+    units[k] = m.unit || '';
+    confidence[k] = m.confidence || '';
+  }
+  return {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    device: res.device,
+    model: res.identified ? res.identified.model : null,
+    measured: { weightKg: cap.weight, impedanceOhm: cap.impedance },
+    derived,
+    units,
+    confidence,
+    trust: bia.trust,
+    bodyFatRecommended: bia.values.bodyFatRecommendedKey
+      ? { key: bia.values.bodyFatRecommendedKey, value: bia.values[bia.values.bodyFatRecommendedKey] }
+      : null,
+    crossCheck: bia.crossCheck || null,
+    flags: bia.flags || [],
+    warnings: bia.warnings || [],
+    omitted: bia.omitted || {},
+    profile,
+  };
+}
+
+function printHuman(r) {
+  const w = r.measured;
+  process.stderr.write('\n');
+  process.stderr.write(`  ${w.weightKg} kg` + (w.impedanceOhm ? `   ${w.impedanceOhm} ohm` : '   (no impedance)') + '\n');
+  if (r.bodyFatRecommended) {
+    process.stderr.write(`  ${r.bodyFatRecommended.value} % body fat`
+      + (r.bodyFatRecommended.key === 'bodyFatPercent' ? ' (from impedance)' : ' (from BMI; impedance failed its checks)') + '\n');
+  }
+  const fatal = r.flags.filter((f) => f.severity === 'fatal');
+  if (fatal.length) process.stderr.write(`  impedance values NOT trustworthy: ${fatal.map((f) => f.rule).join(', ')}\n`);
+  process.stderr.write('\n');
+}
+
+// ---------- service mode ----------
+/*
+ * A long-lived process speaking newline-delimited JSON, which is what an Electron
+ * main process should drive.
+ *
+ * Chosen over one spawn per measurement because a person is standing on a scale
+ * while this runs: the caller needs live progress and a working cancel, and a
+ * single long-lived child dies with the app instead of leaking a process per
+ * attempt. Chosen over a local HTTP server because a pipe needs no port, cannot
+ * be reached by anything else on the machine, and terminates with the parent.
+ *
+ * Every line this writes to stdout is one JSON object. Nothing else is ever
+ * written to stdout, so the caller can parse line by line without a framing
+ * scheme. Human-readable noise goes to stderr.
+ */
+const PROTOCOL_VERSION = 1;
+
+const ERRORS = {
+  BAD_REQUEST: 'the request was not valid JSON, or was missing a required field',
+  UNKNOWN_COMMAND: 'no such command',
+  INVALID_PROFILE: 'age and heightCm are required and must be realistic',
+  BUSY: 'a measurement is already running; cancel it first',
+  DEVICE_NOT_FOUND: 'no scale answered; its radio sleeps when idle',
+  NO_READING: 'connected but no reading arrived',
+  BLUETOOTH_UNAVAILABLE: IS_WINDOWS
+    ? 'Bluetooth is switched off, or no adapter is available. Turn Bluetooth on in Settings, '
+      + 'then Bluetooth and devices.'
+    : 'Bluetooth is switched off, or no adapter is available',
+  PERMISSION_DENIED: IS_WINDOWS
+    ? 'Windows refused Bluetooth to this application. Turn on "Let desktop apps access your '
+      + 'Bluetooth devices" in Settings, Privacy and security, Bluetooth devices.'
+    : 'the operating system refused Bluetooth to this process',
+  TRANSPORT_FAILED: 'the Bluetooth helper could not be started',
+  CANCELLED: 'the measurement was cancelled',
+  INTERNAL: 'unexpected failure',
+};
+
+const OUTCOME_TO_ERROR = {
+  'not-found': 'DEVICE_NOT_FOUND',
+  'bluetooth-unavailable': 'BLUETOOTH_UNAVAILABLE',
+  'no-reading': 'NO_READING',
+  'tcc-denied': 'PERMISSION_DENIED',
+  'spawn-failed': 'TRANSPORT_FAILED',
+  error: 'INTERNAL',
+};
+
+function validateProfile(p) {
+  if (!p || typeof p !== 'object') return 'profile is required';
+  const age = Number(p.age), h = Number(p.heightCm);
+  if (!Number.isFinite(age) || age < 5 || age > 120) return 'age must be a number between 5 and 120';
+  if (!Number.isFinite(h) || h < 90 || h > 250) return 'heightCm must be a number between 90 and 250';
+  const sex = String(p.sex || '').toLowerCase();
+  if (sex && sex !== 'male' && sex !== 'female') return "sex must be 'male' or 'female'";
+  return null;
+}
+
+async function serve(a) {
+  QUIET = true;                                   // stdout belongs to the protocol
+  LOG_ALWAYS = true;                              // but stderr stays open for diagnosis
+  const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  const fail = (id, code, message, detail) =>
+    out({ proto: PROTOCOL_VERSION, type: 'error', id: id || null, code,
+          message: message || ERRORS[code] || code, detail: detail || null });
+
+  let cfg = readConfig();
+  let running = null;                             // { id, child, cancelled }
+
+  out({
+    proto: PROTOCOL_VERSION, type: 'hello',
+    app: 'bodyscale', version: PKG_VERSION,
+    platform: process.platform, node: process.versions.node,
+    device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY], remembered: true } : null,
+    commands: ['measure', 'cancel', 'status', 'forget', 'shutdown'],
+    errorCodes: Object.keys(ERRORS),
+    profile: {
+      required: true,
+      suppliedBy: 'host',
+      fields: ['age', 'heightCm', 'sex'],
+      persisted: false,
+      note: 'The host supplies age, heightCm and sex on every measure. This service never '
+          + 'stores them, never defaults them, and never returns a remembered profile.',
+    },
+    note: 'one JSON object per line; the caller supplies age, heightCm and sex, and nothing else',
+  });
+
+  const rl = readline.createInterface({ input: process.stdin });
+
+  const doMeasure = async (req) => {
+    const bad = validateProfile(req.profile);
+    if (bad) return fail(req.id, 'INVALID_PROFILE', bad);
+    if (running) return fail(req.id, 'BUSY');
+
+    const profile = {
+      sex: String(req.profile.sex || 'male').toLowerCase(),
+      age: Number(req.profile.age),
+      heightCm: Number(req.profile.heightCm),
+    };
+    const opts = {
+      name: req.deviceName || cfg.name || a.name,
+      address: req.address || cfg[ADDRESS_KEY],
+      profile, raw: false, replay: a.replay, python: a.python,
+      scanTimeout: Number(req.scanTimeoutSec) || a.scanTimeout,
+      connectTimeout: a.connectTimeout,
+      hold: Number(req.timeoutSec) || a.hold,
+      onEvent: (e) => out(Object.assign({ proto: PROTOCOL_VERSION, type: 'progress', id: req.id }, e)),
+      registerChild: (child) => { if (running) running.child = child; },
+    };
+
+    running = { id: req.id, child: null, cancelled: false };
+    out({ proto: PROTOCOL_VERSION, type: 'accepted', id: req.id, profile });
+
+    let res;
+    try { res = await measureOnce(opts); }
+    catch (e) { running = null; return fail(req.id, 'INTERNAL', e.message); }
+
+    const wasCancelled = running && running.cancelled;
+    running = null;
+    if (wasCancelled) return fail(req.id, 'CANCELLED');
+
+    if (res.device && res.device.address) {
+      cfg[ADDRESS_KEY] = res.device.address;
+      cfg.name = res.device.name;
+      // The device identity is remembered, so the next scan is instant. The
+      // profile is NOT: in service mode the host owns age, height and sex, it
+      // sends them with every request, and this process keeps no copy.
+      if (cfg.profile) delete cfg.profile;
+      writeConfig(cfg);
+    }
+    if (res.outcome === 'ok' && res.capture.weight > 0) {
+      const body = buildResult(res, profile);
+      out(Object.assign({ proto: PROTOCOL_VERSION, type: 'measurement', id: req.id }, body));
+    } else {
+      fail(req.id, OUTCOME_TO_ERROR[res.outcome] || 'INTERNAL', res.spawnError || null,
+           { outcome: res.outcome, framesSeen: res.capture ? res.capture.frames : 0,
+             spawnError: res.spawnError || null });
+    }
+  };
+
+  rl.on('line', (line) => {
+    const text = line.trim();
+    if (!text) return;
+    let req;
+    try { req = JSON.parse(text); } catch (e) { return fail(null, 'BAD_REQUEST', 'not valid JSON'); }
+    // An array is typeof 'object', so it has to be excluded explicitly.
+    if (!req || typeof req !== 'object' || Array.isArray(req)) return fail(null, 'BAD_REQUEST', 'expected a JSON object');
+    const id = req.id === undefined ? null : req.id;
+
+    switch (req.cmd) {
+      case 'measure':
+        doMeasure(Object.assign({}, req, { id }));
+        return;
+      case 'cancel':
+        if (!running) return fail(id, 'BAD_REQUEST', 'nothing is running');
+        running.cancelled = true;
+        killChild(running.child);
+        out({ proto: PROTOCOL_VERSION, type: 'cancelling', id, cancelling: running.id });
+        return;
+      case 'status':
+        out({ proto: PROTOCOL_VERSION, type: 'status', id,
+              busy: !!running, runningId: running ? running.id : null,
+              device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY] } : null,
+              platform: process.platform, version: PKG_VERSION });
+        return;
+      case 'forget':
+        delete cfg[ADDRESS_KEY];
+        writeConfig(cfg);
+        out({ proto: PROTOCOL_VERSION, type: 'forgotten', id });
+        return;
+      case 'shutdown':
+        out({ proto: PROTOCOL_VERSION, type: 'bye', id });
+        if (running) killChild(running.child);
+        setTimeout(() => process.exit(0), 30);
+        return;
+      default:
+        return fail(id, 'UNKNOWN_COMMAND', `no such command: ${String(req.cmd)}`);
+    }
+  });
+
+  // The parent closing the pipe, or dying, must take this process with it.
+  rl.on('close', () => { if (running) killChild(running.child); process.exit(0); });
+  process.on('SIGINT', () => { if (running) killChild(running.child); process.exit(0); });
+  process.on('SIGTERM', () => { if (running) killChild(running.child); process.exit(0); });
+
+  return new Promise(() => {});                   // run until stdin closes
+}
+
+// ---------- main ----------
+async function main() {
+  const a = parseArgs(process.argv.slice(2));
+  if (a.help) {
+    // Help goes to stdout only when it was actually asked for. A rejected
+    // option writes to stderr and exits non-zero, so a host driving --serve
+    // sees a failure instead of help text mixed into its JSON stream.
+    if (a.badOption) { process.stderr.write(HELP + '\n'); return 2; }
+    console.log(HELP);
+    return 0;
+  }
+  if (a.serve) return serve(a);
+  QUIET = a.quiet;
+
+  let cfg = readConfig();
+  if (a.forget) { cfg = { profile: cfg.profile, name: cfg.name }; delete cfg[ADDRESS_KEY]; writeConfig(cfg); note('forgot the saved device'); }
+
+  const profile = {
+    sex: a.sex || (cfg.profile && cfg.profile.sex) || 'male',
+    age: Number.isFinite(a.age) ? a.age : (cfg.profile && cfg.profile.age) || 30,
+    heightCm: Number.isFinite(a.heightCm) ? a.heightCm : (cfg.profile && cfg.profile.heightCm) || 170,
+  };
+  const opts = {
+    name: a.name, address: a.address || cfg[ADDRESS_KEY], profile, raw: a.raw, replay: a.replay,
+    scanTimeout: a.scanTimeout, connectTimeout: a.connectTimeout, hold: a.hold, python: a.python,
+  };
+  if (opts.replay) note(`replaying ${opts.replay} (no Bluetooth involved)`);
+  note(`profile: ${profile.sex}, ${profile.age}y, ${profile.heightCm}cm`
+       + (opts.address ? `   saved address ${opts.address}` : `   scanning for "${opts.name}"`));
+  if (opts.address && !opts.replay) note(`(identifier is ${process.platform === 'darwin' ? 'a CoreBluetooth UUID, specific to this Mac' : 'a Bluetooth MAC address'})`);
+
+  const interval = Number.isFinite(a.interval) ? a.interval : 3;
+  let exitCode = 0, taken = 0, attempts = 0, last = null, stopping = false;
+
+  if (a.watch) {
+    note('\nLoop mode. Step on the scale for a reading, step off, step on again for the next one.');
+    note('Press Ctrl+C to stop.\n');
+    process.on('SIGINT', () => {
+      stopping = true;
+      note(`\nStopped after ${taken} measurement(s).`);
+      process.exit(0);
+    });
+  }
+
+  for (;;) {
+    attempts++;
+    if (a.watch) note(`\n${'='.repeat(56)}\n  attempt ${attempts}${taken ? `   (${taken} measurement(s) so far)` : ''}\n${'='.repeat(56)}`);
+    const res = await measureOnce(opts);
+    if (stopping) break;
+
+    if (res.device && res.device.address) {
+      cfg[ADDRESS_KEY] = res.device.address; cfg.name = res.device.name; cfg.profile = profile;
+      writeConfig(cfg);
+      opts.address = res.device.address;
+    }
+
+    if (res.outcome === 'ok' && res.capture.weight > 0) {
+      const cap = res.capture;
+      // The scale repeats its last locked reading until someone stands on it
+      // again, so an identical pair is the previous measurement, not a new one.
+      const same = last && last.weight === cap.weight && last.impedance === cap.impedance;
+      if (a.watch && same && !a.allowRepeats) {
+        note(`same reading as last time (${cap.weight} kg). The scale is still holding it.`);
+        note('Step off, wait for it to blank, then step on again.');
+      } else {
+        const out = buildResult(res, profile);
+        out.measurementNumber = taken + 1;
+        process.stdout.write(JSON.stringify(out, null, a.quiet ? 0 : 2) + '\n');
+        if (!a.quiet) printHuman(out);
+        last = { weight: cap.weight, impedance: cap.impedance };
+        taken++;
+        exitCode = 0;
+      }
+    } else {
+      const why = res.outcome === 'tcc-denied'
+        ? (IS_WINDOWS
+          ? 'Windows refused Bluetooth to this application. Open Settings, then Privacy & security, then '
+            + 'Bluetooth devices, and turn on "Let desktop apps access your Bluetooth devices". '
+            + 'Check that Bluetooth itself is switched on while you are there.'
+          : 'macOS refused Bluetooth to this process and killed it. That happens when the app responsible for this '
+            + 'process tree has no Bluetooth permission. Run this from Terminal instead, or double-click run.command, '
+            + 'and accept the Bluetooth prompt the first time.')
+        : res.outcome === 'bluetooth-unavailable'
+        ? (IS_WINDOWS
+          ? 'Bluetooth appears to be switched off, or no adapter is available. Turn Bluetooth on in Settings, '
+            + 'then Bluetooth and devices, and try again.'
+          : 'Bluetooth appears to be switched off, or no adapter is available. Turn Bluetooth on and try again.')
+        : res.outcome === 'not-found'
+        ? `no device named "${opts.name}" answered. Its radio sleeps when idle, so step on the scale to wake it.`
+        : res.outcome === 'spawn-failed'
+        ? (res.spawnError
+          || 'the Bluetooth helper could not be started, so nothing was tried. Python or the bleak package is missing. '
+             + 'Run setup-mac.sh, or setup-win.ps1 on Windows, or set BODYSCALE_PYTHON to a working interpreter.')
+        : 'connected but no reading arrived. Stand on the scale with bare feet on the metal pads.';
+      if (!a.watch) {
+        process.stdout.write(JSON.stringify({ ok: false, error: res.outcome, reason: why,
+                                              timestamp: new Date().toISOString() }) + '\n');
+      }
+      note(why);
+      exitCode = 1;
+      // A permission refusal will not fix itself by retrying.
+      if (res.outcome === 'tcc-denied') break;
+    }
+
+    if (!a.watch) break;
+    if (Number.isFinite(a.max) && taken >= a.max) { note(`\nReached ${a.max} measurement(s). Stopping.`); break; }
+    // A scale that keeps repeating one held reading would otherwise loop for
+    // ever, which is right in front of a person and wrong in a script.
+    if (Number.isFinite(a.maxAttempts) && attempts >= a.maxAttempts) {
+      note(`\nReached ${a.maxAttempts} attempt(s). Stopping.`);
+      break;
+    }
+    if (interval > 0) await new Promise((r) => setTimeout(r, interval * 1000));
+  }
+
+  if (a.watch && taken) note(`\nDone. ${taken} measurement(s) taken.`);
+  return a.watch && taken > 0 ? 0 : exitCode;
+}
+
+if (require.main === module) {
+  main().then((c) => process.exit(c)).catch((e) => {
+    process.stdout.write(JSON.stringify({ ok: false, error: 'crash', reason: e.message }) + '\n');
+    process.exit(1);
+  });
+}
+module.exports = { parseArgs, buildResult, validateProfile, PROTOCOL_VERSION, ERRORS, OUTCOME_TO_ERROR };

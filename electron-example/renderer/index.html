@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Body Scale</title>
+<style>
+  :root {
+    --bg: #12141a; --panel: #1b1e26; --line: #2a2f3a;
+    --ink: #e8eaf0; --dim: #8b93a7; --accent: #4da3ff;
+    --good: #46d18a; --warn: #f0b429; --bad: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 14px; letter-spacing: .01em; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+
+  .profile { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+  input, select {
+    width: 100%; padding: 8px 10px; background: #141721; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; font: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  button {
+    width: 100%; padding: 13px; margin-top: 12px; font: 600 15px/1 inherit;
+    background: var(--accent); color: #06121f; border: 0; border-radius: 8px; cursor: pointer;
+  }
+  button:disabled { background: #313746; color: #6b7386; cursor: default; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); font-weight: 400; font-size: 13px; padding: 9px; }
+
+  .weight { text-align: center; padding: 18px 0 10px; }
+  .weight .n { font-size: 54px; font-weight: 300; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .weight .u { font-size: 18px; color: var(--dim); margin-left: 6px; }
+  .phase { text-align: center; color: var(--dim); font-size: 13px; min-height: 20px; }
+  .phase.err { color: var(--bad); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border-radius: 8px; overflow: hidden; }
+  .cell { background: var(--panel); padding: 9px 11px; }
+  .cell .k { font-size: 11px; color: var(--dim); }
+  .cell .v { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .cell.soft .v { color: var(--dim); }
+
+  .note { font-size: 12px; color: var(--dim); margin-top: 10px; }
+  .flag { font-size: 12px; padding: 7px 9px; border-radius: 6px; margin-top: 7px; }
+  .flag.warn { background: #3a2f12; color: var(--warn); }
+  .flag.fatal { background: #3a1a1a; color: var(--bad); }
+  .hidden { display: none; }
+  #log { font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace; color: #6b7386;
+         max-height: 110px; overflow-y: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<h1>Body Scale</h1>
+
+<div class="card">
+  <div class="profile">
+    <div><label for="age">Age</label><input id="age" type="number" value="39" min="5" max="120"></div>
+    <div><label for="height">Height cm</label><input id="height" type="number" value="180" min="90" max="250"></div>
+    <div><label for="sex">Sex</label>
+      <select id="sex"><option value="male">Male</option><option value="female">Female</option></select>
+    </div>
+  </div>
+  <button id="go">Measure</button>
+  <button id="stop" class="ghost hidden">Cancel</button>
+  <div class="note" id="device">Starting the scale service…</div>
+</div>
+
+<div class="card">
+  <div class="weight"><span class="n" id="kg">--</span><span class="u">kg</span></div>
+  <div class="phase" id="phase">Step on the scale, then press Measure.</div>
+</div>
+
+<div id="results" class="hidden">
+  <div class="card">
+    <div class="grid" id="metrics"></div>
+    <div id="flags"></div>
+    <div class="note" id="caveat"></div>
+  </div>
+</div>
+
+<div class="card"><div id="log"></div></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const goBtn = $('go'), stopBtn = $('stop');
+
+function log(line) {
+  const el = $('log');
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---------------------------------------------------------------- boot
+
+window.scale.start().then((r) => {
+  if (!r.ok) {
+    $('device').textContent = 'Service failed to start: ' + r.message;
+    goBtn.disabled = true;
+    return;
+  }
+  const d = r.hello.device;
+  $('device').textContent = d
+    ? `Remembered ${d.name}. Step on the scale, then press Measure.`
+    : 'No scale paired yet. Step on the scale, then press Measure.';
+  log(`service ${r.hello.version} on ${r.hello.platform}, protocol ${r.hello.proto}`);
+});
+
+// ------------------------------------------------------------ live events
+
+// Progress arrives many times a second while the user is standing on the scale.
+window.scale.onProgress((p) => {
+  if (typeof p.weightKg === 'number' && p.weightKg > 0) $('kg').textContent = p.weightKg.toFixed(2);
+  const says = {
+    scanning:  'Looking for the scale…',
+    found:     'Found it, connecting…',
+    connected: 'Connected.',
+    ready:     'Step on the scale and stand still.',
+    settling:  'Reading…',
+    settled:   'Locked.',
+  };
+  if (says[p.phase]) { $('phase').textContent = says[p.phase]; $('phase').className = 'phase'; }
+});
+
+window.scale.onLog((line) => log(line));
+window.scale.onClosed((info) => log(info.intentional ? 'service stopped' : 'service exited unexpectedly'));
+
+// ------------------------------------------------------------- measuring
+
+goBtn.addEventListener('click', async () => {
+  goBtn.disabled = true;
+  stopBtn.classList.remove('hidden');
+  $('results').classList.add('hidden');
+  $('phase').textContent = 'Starting…';
+  $('phase').className = 'phase';
+  $('kg').textContent = '--';
+
+  // The three facts this app is responsible for. Everything else comes back
+  // from the service.
+  const profile = {
+    age: Number($('age').value),
+    heightCm: Number($('height').value),
+    sex: $('sex').value,
+  };
+
+  const r = await window.scale.measure(profile);
+
+  goBtn.disabled = false;
+  stopBtn.classList.add('hidden');
+
+  if (!r.ok) return showError(r);
+  render(r.result);
+});
+
+stopBtn.addEventListener('click', () => window.scale.cancel());
+
+function showError(r) {
+  $('phase').className = 'phase err';
+  const friendly = {
+    DEVICE_NOT_FOUND: 'The scale did not answer. Its radio sleeps when idle, so step on it and press Measure again.',
+    NO_READING:       'Connected, but no stable reading. Stand still and try again.',
+    PERMISSION_DENIED:'This app is not allowed to use Bluetooth.',
+    TRANSPORT_FAILED: 'The Bluetooth helper could not start. Check the setup step.',
+    CANCELLED:        'Cancelled.',
+    INVALID_PROFILE:  r.message,
+  };
+  $('phase').textContent = friendly[r.code] || (r.code + ': ' + r.message);
+  if (r.code === 'PERMISSION_DENIED') window.scale.openBluetoothSettings();
+}
+
+// --------------------------------------------------------------- rendering
+
+// Show a curated set first. `derived` carries twenty-four keys; dumping all of
+// them is the fastest way to make a body composition screen unreadable.
+const SHOW = [
+  ['bodyFatPercent',      'Body fat'],
+  ['fatMassKg',           'Fat mass'],
+  ['muscleMassKg',        'Muscle mass'],
+  ['skeletalMuscleMassKg','Skeletal muscle'],
+  ['bodyWaterLitres',     'Body water'],
+  ['bodyWaterPercent',    'Water %'],
+  ['boneMassKg',          'Bone mass'],
+  ['proteinMassKg',       'Protein'],
+  ['bmi',                 'BMI'],
+  ['bmrKcal',             'BMR'],
+  ['fatFreeMassKg',       'Fat-free mass'],
+  ['bmiCategoryWho',      'BMI category'],
+];
+
+function render(m) {
+  $('kg').textContent = m.measured.weightKg.toFixed(2);
+  $('phase').textContent = m.measured.impedanceOhm
+    ? `Done. Impedance ${m.measured.impedanceOhm} ohm.`
+    : 'Done. No impedance, so body composition is estimated from BMI.';
+  $('phase').className = 'phase';
+
+  const cells = [];
+  for (const [key, label] of SHOW) {
+    if (!(key in m.derived)) continue;
+    const value = m.derived[key];
+    const unit = m.units[key] || '';
+    // Vendor-convention numbers are dimmed: they have no clinical validation.
+    const soft = m.confidence[key] === 'derived-vendor-convention';
+    const shown = typeof value === 'number' ? value : value;
+    cells.push(
+      `<div class="cell${soft ? ' soft' : ''}">` +
+        `<div class="k">${label}</div>` +
+        `<div class="v">${shown}${unit && unit !== '' ? ' <span class="k">' + unit + '</span>' : ''}</div>` +
+      `</div>`);
+  }
+  $('metrics').innerHTML = cells.join('');
+
+  // Trust and flags come from the service. Do not invent your own thresholds.
+  const flags = [];
+  if (!m.trust.impedanceDerived) {
+    flags.push('<div class="flag fatal">The impedance reading failed its checks. Body fat, water and muscle below are estimated from BMI, not measured.</div>');
+  }
+  for (const f of m.flags) {
+    flags.push(`<div class="flag ${f.severity === 'fatal' ? 'fatal' : 'warn'}">${f.message}</div>`);
+  }
+  $('flags').innerHTML = flags.join('');
+
+  $('caveat').textContent =
+    'A foot-to-foot scale measures your legs well and your torso barely. Track the trend '
+    + 'at the same time of day rather than trusting a single absolute number.';
+
+  $('results').classList.remove('hidden');
+  log(`measured ${m.measured.weightKg} kg, ${m.measured.impedanceOhm} ohm, ${Object.keys(m.derived).length} derived values`);
+}
+</script>
+</body>
+</html>

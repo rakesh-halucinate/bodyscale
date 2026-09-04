@@ -1,0 +1,8 @@
+#!/bin/bash
+# Runs Python from the bundle that declares the Bluetooth usage description.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+export PYTHONHOME="/usr/local/Cellar/python@3.11/3.11.15_3/Frameworks/Python.framework/Versions/3.11"
+export PYTHONPATH="/Users/Halucinate/Claude Projects/Bluetooth BodyScale/.venv/lib/python3.11/site-packages"
+export PYTHONDONTWRITEBYTECODE=1
+exec "$HERE/blehost.app/Contents/MacOS/blehost" "$@"
