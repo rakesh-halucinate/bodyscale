@@ -109,6 +109,7 @@
       ctx.state.drt = {
         session: null, weightKg: 0, impedanceOhm: null, live: false,
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
+        profileSent: false,
       };
       ctx.log('Dr Trust driver: subscribing to the record channel 0xFFB3 and the live weight stream 0xFFB2.', 'ok');
       const a = await ctx.subscribe(0xffb0, 0xffb3);
@@ -216,7 +217,27 @@
       const q = drTrust.findMarker(b, 0x23);
       if (m2 >= 0 && q < 0) {
         st.session = m2 >= 1 ? b[m2 - 1] : b[0];
-        ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id 0x${st.session.toString(16)}. No handshake needed on this firmware.`, 'info');
+        ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id 0x${st.session.toString(16)}.`, 'info');
+
+        /*
+         * Answer it. The scale waits for a session acknowledgement and the
+         * user profile before it runs its full impedance program — the one the
+         * display calls P1, which holds for about ten seconds, then L1.
+         *
+         * Left unanswered it still streams weight and still sends a record
+         * frame, but the impedance in it is a quick preliminary figure rather
+         * than the measured one, which is why unanswered sessions produced
+         * values far outside the physically possible band.
+         *
+         * Not awaited: this runs inside frame decoding, and a write that
+         * stalls must not stall the stream. Failures are reported by the
+         * transport on its own channel.
+         */
+        if (!st.profileSent) {
+          st.profileSent = true;
+          Promise.resolve(drTrust.sendProfile(ctx))
+            .catch((e) => ctx.log(`  Dr Trust: handshake failed: ${e.message}`, 'warn'));
+        }
         return {
           characteristic: 'Dr Trust session setup', spec: 'Dr Trust vendor protocol',
           raw: BCS.hex(b), units: '', flagBits: [], warnings: [],

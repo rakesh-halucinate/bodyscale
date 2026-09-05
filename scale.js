@@ -303,6 +303,15 @@ function measureOnce(opts) {
       ? spawn(process.execPath, [path.join(ROOT, 'replay.js'), opts.replay], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true })
       : spawn(opts.python || PYTHON, [path.join(ROOT, 'ble.py'), ...args],
               { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+    /*
+     * A write to a transport that has stopped reading raises EPIPE
+     * ASYNCHRONOUSLY, as an 'error' event on the stream. With no listener that
+     * is an uncaught exception and the whole service dies, and no try/catch
+     * around the write can prevent it. The transport exiting mid-handshake is
+     * an ordinary race, not a fault.
+     */
+    if (py.stdin) py.stdin.on('error', (e) => note(`  transport stdin: ${e.message}`));
+
     const rl = readline.createInterface({ input: py.stdout });
 
     const emit = opts.onEvent || (() => {});
@@ -388,9 +397,33 @@ function measureOnce(opts) {
       // for a driver to turn on here.
       subscribe: async () => true,
       subscribeAll: async () => {},
+      /*
+       * Put a packet on the wire.
+       *
+       * This used to be a stub that logged "this firmware needs no handshake"
+       * and dropped the packet. That assumption was wrong: the phone app writes
+       * a session acknowledgement and the user profile here, and only then does
+       * the scale run its extended impedance program — P1 on the display,
+       * holding about ten seconds, then L1. Without the write it takes a quick
+       * preliminary reading instead, which is where the implausible impedance
+       * values were coming from.
+       */
       write: async (svc, chr, bytes, what) => {
-        note(`  (write "${what}" to 0x${chr.toString(16)} not wired in the CLI; this firmware needs no handshake)`);
-        return false;
+        if (opts.replay) return false;             // a recording cannot be written to
+        const uuid = `0000${chr.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
+        const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        if (!py.stdin || py.stdin.destroyed || py.stdin.writableEnded) {
+          note(`  cannot write ${what}: the transport is no longer listening`);
+          return false;
+        }
+        try {
+          py.stdin.write(JSON.stringify({ cmd: 'write', char: uuid, hex, what }) + '\n');
+          note(`  -> wrote ${what} to 0x${chr.toString(16)} (${bytes.length} bytes)`);
+          return true;
+        } catch (e) {
+          note(`  write of ${what} failed: ${e.message}`);
+          return false;
+        }
       },
     });
 

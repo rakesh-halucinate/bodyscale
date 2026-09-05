@@ -314,17 +314,72 @@
      */
     if (out.trust.impedanceDerived) {
       const vendorBone = ffm * 0.0665;
+      const vendorMuscle = ffm - vendorBone;
+      const vendorProtein = ffm * 0.2115;
       out.vendorMatch = {
-        note: "How this scale's own app computes the three values where the two differ. "
-            + 'Everything not listed here already agrees to within rounding.',
+        note: "The full panel as this scale's own app reports it, from the same two "
+            + 'numbers. Provided so a host can show figures identical to the device. '
+            + 'These are the scale vendor\u2019s conventions, not the published '
+            + 'equations in `values`, and are never a substitute for them.',
+
+        // Everything the impedance genuinely determines. Both sides use Sun 2003
+        // and the Wang 1999 hydration constant, so these already agree; they are
+        // repeated here only so the block is a complete panel a UI can render.
+        weightKg: round(W, 2),
+        bodyFatPercent: round(fatPct, 1),
+        fatMassKg: round(W - ffm, 2),
+        bodyWaterLitres: round(tbwL, 2),
+        bodyWaterPercent: round((tbwL / W) * 100, 1),
+        fatFreeMassKg: round(ffm, 2),
+        bmi: round(bmi, 1),
+
+        // The values where the two conventions genuinely part company.
         bmrKcal: round(370 + 21.6 * ffm, 0),
-        bmrBasis: 'Katch-McArdle, from lean mass',
+        bmrBasis: 'Katch-McArdle, from lean mass. `values.bmrKcal` uses Mifflin-St Jeor.',
         skeletalMuscleMassKg: round(ffm * 0.60, 2),
-        skeletalMuscleBasis: 'a flat 60% of fat-free mass, vendor convention',
+        skeletalMuscleBasis: 'a flat 60% of fat-free mass. `values` uses Janssen 2000.',
         boneMassKg: round(vendorBone, 2),
-        boneBasis: '6.65% of fat-free mass, vendor convention',
-        muscleMassKg: round(ffm - vendorBone, 2),
-        muscleBasis: 'fat-free mass minus their bone figure',
+        boneBasis: '6.65% of fat-free mass. Arbitrary on both sides.',
+        muscleMassKg: round(vendorMuscle, 2),
+        muscleMassPercent: round((vendorMuscle / W) * 100, 1),
+        muscleBasis: 'fat-free mass minus their bone figure.',
+        proteinMassKg: round(vendorProtein, 2),
+        proteinBasis: '21.15% of fat-free mass. See `ambiguous` below.',
+        idealWeightKg: round(22 * Hm * Hm, 1),
+        idealWeightBasis: 'BMI 22 at this height, as a single figure rather than a range.',
+
+        /*
+         * Fitted from ONE reading, so more than one formula reproduces it and
+         * they diverge elsewhere. Named rather than presented as settled.
+         */
+        ambiguous: {
+          proteinMassKg: 'Fat-free mass x 0.2115 and body weight x 0.1316 both reproduce '
+                       + 'the observed 12.40 kg exactly. They diverge at other weights, and '
+                       + 'one reading cannot separate them. A second at a clearly different '
+                       + 'weight would.',
+        },
+
+        /*
+         * The app shows these; they cannot be recovered from one reading, and
+         * `omitted` explains separately why this code does not compute them at
+         * all. Both facts are true and neither replaces the other.
+         */
+        notRecovered: {
+          visceralFatPercent: 'one equation, several unknowns',
+          subcutaneousFatPercent: 'one equation, several unknowns',
+          metabolicAgeYears: 'one equation, several unknowns',
+          bodyScore: 'one equation, several unknowns',
+        },
+
+        /*
+         * Worth knowing before trusting the vendor column: the app's own figures
+         * do not add up. Water plus protein plus bone came to 59.18 kg against a
+         * stated fat-free mass of 58.62 kg, so its protein and bone are computed
+         * independently rather than as parts of one partition.
+         */
+        selfConsistency: 'The app\u2019s water, protein and bone sum to about 0.56 kg more '
+                       + 'than its own fat-free mass, so those three are independent '
+                       + 'conventions rather than a partition of it.',
       };
     }
 

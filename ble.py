@@ -168,19 +168,63 @@ async def run(args):
         # worker parked on a read that will never return makes that join hang
         # forever, so the process never reaches its own exit. A daemon thread
         # is not joined at interpreter exit, so it cannot block shutdown.
+        async def do_write(req):
+            """Write one packet to a characteristic, on behalf of the decoder.
+
+            The decoding lives in JavaScript, so the handshake a scale expects
+            is composed there and sent here to be put on the wire. Without this
+            the write side did not exist at all: a driver could compose a
+            handshake and it went nowhere.
+            """
+            char = req.get("char")
+            try:
+                data = bytes.fromhex(str(req.get("hex", "")).replace(" ", ""))
+            except ValueError:
+                log(f"write to {char}: hex payload is malformed", "error")
+                return
+            if not char or not data:
+                log(f"write to {char}: nothing to send", "error")
+                return
+            try:
+                await client.write_gatt_char(char, data, response=bool(req.get("response", True)))
+                emit(t="wrote", char=char, bytes=len(data), what=req.get("what"))
+            except Exception as exc:                  # noqa: BLE001
+                log(f"write to {char} failed: {type(exc).__name__}: {exc}", "error")
+
         async def wait_stdin_eof():
+            """Serve commands from the parent until it closes the pipe.
+
+            Reading stdin happens on a DAEMON thread, not run_in_executor.
+            asyncio.run() ends by calling loop.shutdown_default_executor(),
+            which joins its workers; a worker parked on a read that will never
+            return makes that join hang forever. A daemon thread is not joined
+            at interpreter exit, so it cannot block shutdown.
+
+            The work itself is handed back to the event loop, because bleak is
+            not thread-safe and a GATT write must run on the loop that owns the
+            connection.
+            """
             loop = asyncio.get_running_loop()
             done = asyncio.Event()
 
             def block():
                 try:
-                    for _ in sys.stdin:
-                        pass
+                    for line in sys.stdin:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            req = json.loads(line)
+                        except ValueError:
+                            continue                  # not for us; ignore quietly
+                        if isinstance(req, dict) and req.get("cmd") == "write":
+                            loop.call_soon_threadsafe(
+                                lambda r=req: asyncio.ensure_future(do_write(r)))
                 except Exception:                     # noqa: BLE001  closed pipe
                     pass
                 loop.call_soon_threadsafe(done.set)
 
-            threading.Thread(target=block, name="stdin-eof", daemon=True).start()
+            threading.Thread(target=block, name="stdin-commands", daemon=True).start()
             await done.wait()
 
         tasks = [asyncio.create_task(wait_stdin_eof()),
