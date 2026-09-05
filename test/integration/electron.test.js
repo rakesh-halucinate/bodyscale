@@ -39,11 +39,13 @@ const MAIN_SRC = fs.readFileSync(MAIN_JS, 'utf8');
 const ADDRESS_KEY = `address_${process.platform}`;
 
 /** The exact surface the renderer is allowed to see. */
-const SURFACE = ['start', 'measure', 'cancel', 'status', 'forget', 'openBluetoothSettings',
+const SURFACE = ['start', 'measure', 'measureWithoutProfile', 'compute', 'cancel', 'status',
+                 'forget', 'openBluetoothSettings',
                  'onProgress', 'onLog', 'onError', 'onClosed'];
 
 /** The six channels main must answer, and the four it pushes on. */
-const INVOKE_CHANNELS = ['scale:start', 'scale:measure', 'scale:cancel',
+const INVOKE_CHANNELS = ['scale:start', 'scale:measure', 'scale:measureWithoutProfile',
+                         'scale:compute', 'scale:cancel',
                          'scale:status', 'scale:forget', 'scale:openBluetoothSettings'];
 const PUSH_CHANNELS = ['scale:progress', 'scale:log', 'scale:error', 'scale:closed'];
 
@@ -225,6 +227,8 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
   const profile = { age: 39, heightCm: 180, sex: 'male' };
   await bridge.api.start();
   await bridge.api.measure(profile);
+  await bridge.api.measureWithoutProfile();
+  await bridge.api.compute({ weightKg: 97.9, impedanceOhm: 529.9 }, profile);
   await bridge.api.cancel();
   await bridge.api.status();
   await bridge.api.forget();
@@ -232,7 +236,7 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
 
   const asked = invokes.slice(mark).map((i) => i.channel);
   assert.deepStrictEqual(asked, INVOKE_CHANNELS,
-    'the preload invokes exactly these six channels, in this order');
+    'the preload invokes exactly these eight channels, in this order');
   assert.deepStrictEqual([...handlers.keys()].sort(), INVOKE_CHANNELS.slice().sort(),
     'main registers exactly those channels: none missing, none extra');
 
@@ -245,7 +249,8 @@ test('INT-ELEC-01  main answers exactly the channels the preload invokes, and no
   // but nothing that identifies or describes whoever is on the scale.
   const PERSONAL = ['age', 'heightCm', 'sex', 'weight', 'name', 'email'];
   for (const i of invokes.slice(mark)) {
-    if (i.channel === 'scale:measure') continue;
+    // measure and compute are the two channels a profile may cross on.
+    if (i.channel === 'scale:measure' || i.channel === 'scale:compute') continue;
     const payload = JSON.stringify(i.args === undefined ? null : i.args);
     for (const field of PERSONAL) {
       assert.ok(!payload.includes(field), `${i.channel} sends nothing about the person, saw ${payload}`);
@@ -366,7 +371,7 @@ test('INT-ELEC-07  scale:start reports a hello, and starting again is idempotent
   assert.strictEqual(first.hello.type, 'hello');
   assert.strictEqual(first.hello.app, 'bodyscale');
   assert.strictEqual(first.hello.platform, process.platform);
-  assert.deepStrictEqual(first.hello.commands, ['measure', 'cancel', 'status', 'forget', 'shutdown']);
+  assert.deepStrictEqual(first.hello.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']);
   assert.deepStrictEqual(first.hello.errorCodes, H.ALL_ERROR_CODES);
 
   const mark = pushed.length;

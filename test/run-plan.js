@@ -37,6 +37,7 @@ const AREAS = {
   CLI: 'The BodyScaleClient wrapper',
   ELEC: 'The Electron main process and preload bridge',
   PLAT: 'Platform portability behaviours',
+  DEFER: 'Capturing a reading before the profile is known',
   ROB: 'Robustness against malformed input',
 };
 

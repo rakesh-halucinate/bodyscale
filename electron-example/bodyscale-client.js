@@ -173,6 +173,42 @@ class BodyScaleClient extends EventEmitter {
     });
   }
 
+  /**
+   * Take a reading now and interpret it later.
+   *
+   * The scale's radio sleeps within seconds, so the weight has to be captured
+   * the moment it settles. A person's age does not. This resolves with the two
+   * numbers the hardware sent and an empty `derived`; pass `measured` back to
+   * compute() once you have the profile.
+   *
+   * @returns {Promise<object>} a measurement with `profileDeferred: true`
+   */
+  measureWithoutProfile(options = {}) {
+    let owned = false;
+    return this._request(Object.assign({ cmd: 'measure', withoutProfile: true }, options), {
+      resolveOn: 'measurement',
+      onAccepted: () => { owned = true; this.busy = true; },
+      always: () => { if (owned) this.busy = false; },
+    });
+  }
+
+  /**
+   * Interpret a reading that was taken earlier.
+   *
+   * `derived` is a pure function of `measured` and the profile, so this returns
+   * exactly what a live measurement with that profile would have produced. No
+   * radio is touched and nothing waits.
+   *
+   * @param {{weightKg:number, impedanceOhm:number|null}} measured  from an earlier measurement
+   * @param {{age:number, heightCm:number, sex?:'male'|'female'}} profile
+   * @param {{measuredAt?:string, model?:string, device?:object}} [context]  carried through unchanged
+   * @returns {Promise<object>} the same envelope shape, with `source: 'recomputed'`
+   */
+  compute(measured, profile, context = {}) {
+    return this._request(Object.assign({ cmd: 'compute', measured, profile }, context),
+                         { resolveOn: 'measurement' });
+  }
+
   /** Stop a running measurement. Its promise rejects with code CANCELLED. */
   cancel() { return this._request({ cmd: 'cancel' }, { resolveOn: 'cancelling' }); }
 

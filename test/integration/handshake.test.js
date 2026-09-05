@@ -213,13 +213,13 @@ test('INT-HS-02  hello carries exactly its documented fields, with the right typ
 
 // Prevents: the Electron app offering a button for a command the service does
 // not have, or hiding one it does — the command list is the host's menu.
-test('INT-HS-03  hello declares the five commands the service accepts', async () => {
+test('INT-HS-03  hello declares the six commands the service accepts', async () => {
   const { events } = await H.serve({
     env: { BODYSCALE_CONFIG_DIR: emptyConfigDir('hs03') },
     onEvent: (ev) => ev.type === 'hello',
   });
   const hello = H.first(events, 'hello');
-  assert.deepStrictEqual(hello.commands, ['measure', 'cancel', 'status', 'forget', 'shutdown']);
+  assert.deepStrictEqual(hello.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']);
 });
 
 // Prevents: the host writing a message for an error code the service can emit

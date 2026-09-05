@@ -49,8 +49,8 @@ const RECORDED_ADDRESS = 'BEECC6EC-BD30-3EAC-B148-4833628A8A58';
 /** Every top-level field of a `measurement`. */
 const ENVELOPE_KEYS = [
   'bodyFatRecommended', 'confidence', 'crossCheck', 'derived', 'device', 'flags',
-  'id', 'measured', 'model', 'ok', 'omitted', 'profile', 'proto', 'timestamp',
-  'trust', 'type', 'units', 'warnings',
+  'id', 'measured', 'model', 'ok', 'omitted', 'profile', 'proto', 'source',
+  'timestamp', 'trust', 'type', 'units', 'warnings',
 ];
 
 const OMITTED_KEYS = [
@@ -118,7 +118,7 @@ test('INT-MEAS-02  progress reports connected, ready and each settling weight, t
 // The Electron main process destructures this envelope. A field that quietly
 // disappears, or a new one that quietly appears, is a renderer crash or a
 // silent leak of something the host never asked for.
-test('INT-MEAS-03  the measurement envelope has exactly the eighteen documented top-level fields', async () => {
+test('INT-MEAS-03  the measurement envelope has exactly the nineteen documented top-level fields', async () => {
   const { terminal } = await H.measureOnce({});
   assert.deepStrictEqual(Object.keys(terminal).sort(), ENVELOPE_KEYS);
 });
@@ -131,6 +131,7 @@ test('INT-MEAS-04  every envelope field has its documented type', async () => {
 
   H.assertShape(assert, m, {
     proto: 'number', type: 'string', id: 'string', ok: 'boolean', timestamp: 'string',
+    source: 'string',
     device: 'object', model: 'string', measured: 'object', derived: 'object',
     units: 'object', confidence: 'object', trust: 'object',
     bodyFatRecommended: 'object', crossCheck: 'object', flags: 'array',

@@ -108,7 +108,7 @@ test('INT-CLI-01  start() resolves with hello and is idempotent', T, async () =>
     assert.strictEqual(h1.type, 'hello');
     assert.strictEqual(h1.proto, PROTOCOL_VERSION);
     assert.strictEqual(h1.app, 'bodyscale');
-    assert.deepStrictEqual(h1.commands, ['measure', 'cancel', 'status', 'forget', 'shutdown'],
+    assert.deepStrictEqual(h1.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown'],
       'hello names the five commands the client wraps');
     assert.deepStrictEqual(h1.errorCodes, H.ALL_ERROR_CODES,
       'and the eleven codes the renderer switches on');

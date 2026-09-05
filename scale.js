@@ -467,7 +467,7 @@ function killChild(child) {
 }
 
 // ---------- output ----------
-function buildResult(res, profile) {
+function buildResult(res, profile, extra) {
   const cap = res.capture;
   const bia = BIA.estimate({ weightKg: cap.weight, impedanceOhm: cap.impedance || 0,
                              heightCm: profile.heightCm, age: profile.age, sex: profile.sex });
@@ -479,8 +479,9 @@ function buildResult(res, profile) {
     units[k] = m.unit || '';
     confidence[k] = m.confidence || '';
   }
-  return {
+  return Object.assign({
     ok: true,
+    source: 'scale',                  // 'scale' when read live, 'recomputed' otherwise
     timestamp: new Date().toISOString(),
     device: res.device,
     model: res.identified ? res.identified.model : null,
@@ -497,7 +498,7 @@ function buildResult(res, profile) {
     warnings: bia.warnings || [],
     omitted: bia.omitted || {},
     profile,
-  };
+  }, extra || {});
 }
 
 function printHuman(r) {
@@ -559,6 +560,25 @@ const OUTCOME_TO_ERROR = {
   error: 'INTERNAL',
 };
 
+/*
+ * Validate a `measured` pair a host is handing back for recomputation.
+ *
+ * The scale contributes exactly two numbers, so a reading can be captured now
+ * and interpreted later. That is not a workaround: the radio window is short,
+ * while a person's age can be asked at leisure.
+ */
+function validateMeasured(m) {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return 'measured is required, as an object';
+  const w = Number(m.weightKg);
+  if (!Number.isFinite(w) || w <= 0) return 'measured.weightKg must be a positive number';
+  if (w > 500) return 'measured.weightKg is above 500, which no scale reports for a person';
+  if (m.impedanceOhm !== undefined && m.impedanceOhm !== null) {
+    const z = Number(m.impedanceOhm);
+    if (!Number.isFinite(z) || z < 0) return 'measured.impedanceOhm must be a number, or null';
+  }
+  return null;
+}
+
 function validateProfile(p) {
   if (!p || typeof p !== 'object') return 'profile is required';
   const age = Number(p.age), h = Number(p.heightCm);
@@ -585,15 +605,18 @@ async function serve(a) {
     app: 'bodyscale', version: PKG_VERSION,
     platform: process.platform, node: process.versions.node,
     device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY], remembered: true } : null,
-    commands: ['measure', 'cancel', 'status', 'forget', 'shutdown'],
+    commands: ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown'],
     errorCodes: Object.keys(ERRORS),
     profile: {
       required: true,
       suppliedBy: 'host',
       fields: ['age', 'heightCm', 'sex'],
       persisted: false,
+      deferrable: true,
       note: 'The host supplies age, heightCm and sex on every measure. This service never '
-          + 'stores them, never defaults them, and never returns a remembered profile.',
+          + 'stores them, never defaults them, and never returns a remembered profile. '
+          + 'A measure may set withoutProfile: true to capture weight and impedance now '
+          + 'and interpret them later with the compute command.',
     },
     note: 'one JSON object per line; the caller supplies age, heightCm and sex, and nothing else',
   });
@@ -601,11 +624,30 @@ async function serve(a) {
   const rl = readline.createInterface({ input: process.stdin });
 
   const doMeasure = async (req) => {
-    const bad = validateProfile(req.profile);
-    if (bad) return fail(req.id, 'INVALID_PROFILE', bad);
+    /*
+     * A profile is required unless the host explicitly defers it.
+     *
+     * `withoutProfile: true` is opt-in on purpose. A host that simply forgot to
+     * send a profile is still caught with INVALID_PROFILE, which is the common
+     * bug; deferring is a deliberate choice, and it has to look like one.
+     *
+     * Deferring is genuinely useful: the scale's radio sleeps within seconds,
+     * so the weight must be captured the moment it settles, while a person's
+     * age can be asked at leisure. Send the reading back later with `compute`.
+     */
+    const deferred = req.withoutProfile === true;
+    if (!deferred) {
+      const bad = validateProfile(req.profile);
+      if (bad) return fail(req.id, 'INVALID_PROFILE', bad);
+    } else if (req.profile !== undefined && req.profile !== null) {
+      return fail(req.id, 'BAD_REQUEST',
+        'send either a profile or withoutProfile: true, not both');
+    }
     if (running) return fail(req.id, 'BUSY');
 
-    const profile = {
+    // The deferred placeholder is never reported. It exists only so the frame
+    // decoding, which needs no profile, has something well formed to carry.
+    const profile = deferred ? null : {
       sex: String(req.profile.sex || 'male').toLowerCase(),
       age: Number(req.profile.age),
       heightCm: Number(req.profile.heightCm),
@@ -613,7 +655,8 @@ async function serve(a) {
     const opts = {
       name: req.deviceName || cfg.name || a.name,
       address: req.address || cfg[ADDRESS_KEY],
-      profile, raw: false, replay: a.replay, python: a.python,
+      profile: profile || { sex: 'male', age: 30, heightCm: 170 },
+      raw: false, replay: a.replay, python: a.python,
       scanTimeout: Number(req.scanTimeoutSec) || a.scanTimeout,
       connectTimeout: a.connectTimeout,
       hold: Number(req.timeoutSec) || a.hold,
@@ -622,7 +665,8 @@ async function serve(a) {
     };
 
     running = { id: req.id, child: null, cancelled: false };
-    out({ proto: PROTOCOL_VERSION, type: 'accepted', id: req.id, profile });
+    out({ proto: PROTOCOL_VERSION, type: 'accepted', id: req.id,
+          profile: profile, profileDeferred: deferred });
 
     let res;
     try { res = await measureOnce(opts); }
@@ -646,7 +690,24 @@ async function serve(a) {
       writeConfig(cfg);
     }
     if (res.outcome === 'ok' && res.capture.weight > 0) {
-      const body = buildResult(res, profile);
+      const body = deferred
+        ? {
+          ok: true,
+          source: 'scale',
+          profileDeferred: true,
+          timestamp: new Date().toISOString(),
+          device: res.device,
+          model: res.identified ? res.identified.model : null,
+          measured: { weightKg: res.capture.weight, impedanceOhm: res.capture.impedance },
+          derived: {}, units: {}, confidence: {}, omitted: {},
+          trust: { impedanceFree: false, impedanceDerived: false },
+          bodyFatRecommended: null, crossCheck: null, flags: [],
+          warnings: ['No profile was given, so nothing was interpreted. Send this '
+                   + 'measured pair back with the compute command once you have the '
+                   + 'age, height and sex.'],
+          profile: null,
+        }
+        : buildResult(res, profile);
       out(Object.assign({ proto: PROTOCOL_VERSION, type: 'measurement', id: req.id }, body));
     } else {
       fail(req.id, OUTCOME_TO_ERROR[res.outcome] || 'INTERNAL', res.spawnError || null,
@@ -668,6 +729,46 @@ async function serve(a) {
       case 'measure':
         doMeasure(Object.assign({}, req, { id }));
         return;
+
+      /*
+       * Interpret a reading that was taken earlier.
+       *
+       * `derived` is a pure function of `measured` and the profile, so a
+       * measurement captured without an age loses nothing — it simply has not
+       * been interpreted yet. Hand the same two numbers back with a complete
+       * profile and the full panel comes out, identical to what a live
+       * measurement with that profile would have produced.
+       *
+       * No radio, no device, no waiting. It is arithmetic.
+       */
+      case 'compute': {
+        const badMeasured = validateMeasured(req.measured);
+        if (badMeasured) return fail(id, 'BAD_REQUEST', badMeasured);
+        const badProfile = validateProfile(req.profile);
+        if (badProfile) return fail(id, 'INVALID_PROFILE', badProfile);
+
+        const profile = {
+          sex: String(req.profile.sex || 'male').toLowerCase(),
+          age: Number(req.profile.age),
+          heightCm: Number(req.profile.heightCm),
+        };
+        const capture = {
+          weight: Number(req.measured.weightKg),
+          impedance: req.measured.impedanceOhm == null ? null : Number(req.measured.impedanceOhm),
+        };
+        const body = buildResult(
+          { capture, device: req.device || null, identified: req.model ? { model: req.model } : null },
+          profile,
+          {
+            source: 'recomputed',
+            // When the reading was taken, if the host kept it. The `timestamp`
+            // field stays the moment of computation, so the two are never
+            // confused.
+            measuredAt: typeof req.measuredAt === 'string' ? req.measuredAt : null,
+          });
+        out(Object.assign({ proto: PROTOCOL_VERSION, type: 'measurement', id }, body));
+        return;
+      }
       case 'cancel':
         if (!running) return fail(id, 'BAD_REQUEST', 'nothing is running');
         running.cancelled = true;

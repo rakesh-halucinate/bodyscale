@@ -26,6 +26,18 @@ contextBridge.exposeInMainWorld('scale', {
    */
   measure: (profile) => ipcRenderer.invoke('scale:measure', profile),
 
+  /**
+   * Take a reading before the profile is known. The radio window is short; the
+   * user's age can wait. Pass `result.measured` to compute() afterwards.
+   */
+  measureWithoutProfile: (options) => ipcRenderer.invoke('scale:measureWithoutProfile', options),
+
+  /**
+   * Interpret a reading taken earlier. Identical to a live measurement with the
+   * same profile, and it touches no hardware.
+   */
+  compute: (measured, profile, context) => ipcRenderer.invoke('scale:compute', measured, profile, context),
+
   cancel:  () => ipcRenderer.invoke('scale:cancel'),
   status:  () => ipcRenderer.invoke('scale:status'),
   forget:  () => ipcRenderer.invoke('scale:forget'),

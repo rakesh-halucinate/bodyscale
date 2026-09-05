@@ -57,7 +57,7 @@ test('INT-SYNC-01  hello arrives once, first, and carries no id to correlate on'
   assert.strictEqual(events[0].type, 'hello', 'hello is the very first line');
   assert.strictEqual('id' in hellos[0], false, 'hello carries no id field at all');
   assert.strictEqual(hellos[0].proto, 1);
-  assert.deepStrictEqual(hellos[0].commands, ['measure', 'cancel', 'status', 'forget', 'shutdown'],
+  assert.deepStrictEqual(hellos[0].commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown'],
     'hello advertises exactly the five commands');
   assert.deepStrictEqual(hellos[0].errorCodes, H.ALL_ERROR_CODES,
     'hello advertises exactly the eleven error codes');

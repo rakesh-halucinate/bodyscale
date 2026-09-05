@@ -85,8 +85,9 @@ test('electron: main registers every channel the preload calls', async () => {
 test('electron: the preload exposes a closed surface, and no Node', async () => {
   assert.ok(bridge, 'the preload called exposeInMainWorld');
   assert.strictEqual(bridge.key, 'scale');
-  const expected = ['start', 'measure', 'cancel', 'status', 'forget',
-                    'openBluetoothSettings', 'onProgress', 'onLog', 'onError', 'onClosed'];
+  const expected = ['start', 'measure', 'measureWithoutProfile', 'compute', 'cancel',
+                    'status', 'forget', 'openBluetoothSettings',
+                    'onProgress', 'onLog', 'onError', 'onClosed'];
   assert.deepStrictEqual(Object.keys(bridge.api).sort(), expected.sort(),
                          'exactly the intended methods, nothing more');
   for (const fn of Object.values(bridge.api)) assert.strictEqual(typeof fn, 'function');

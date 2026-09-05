@@ -222,7 +222,7 @@ test('INT-ERR-05  an unrecognised cmd is UNKNOWN_COMMAND and the message names i
   assert.strictEqual(err.id, 'U1');
   // hello is the host's contract; a command it does not list must be refused.
   assert.strictEqual(hello.commands.includes('calibrate'), false);
-  assert.deepStrictEqual(hello.commands, ['measure', 'cancel', 'status', 'forget', 'shutdown']);
+  assert.deepStrictEqual(hello.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']);
 });
 
 // Prevents: a request object built without its `cmd` field (a destructuring

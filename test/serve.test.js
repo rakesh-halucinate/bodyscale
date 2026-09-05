@@ -70,7 +70,7 @@ test('serve: hello announces the contract before any command is sent', async () 
   assert.strictEqual(events[0].type, 'hello', 'hello is sent unprompted, before any request');
   assert.strictEqual(hello.app, 'bodyscale');
   assert.strictEqual(hello.platform, process.platform);
-  for (const cmd of ['measure', 'cancel', 'status', 'forget', 'shutdown']) {
+  for (const cmd of ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']) {
     assert.ok(hello.commands.includes(cmd), `hello advertises ${cmd}`);
   }
   for (const code of ['INVALID_PROFILE', 'DEVICE_NOT_FOUND', 'BUSY', 'CANCELLED']) {

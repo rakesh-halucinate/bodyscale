@@ -135,7 +135,7 @@ so you can feature-detect instead of hard-coding.
     "fields": ["age", "heightCm", "sex"],
     "persisted": false
   },
-  "commands": ["measure", "cancel", "status", "forget", "shutdown"],
+  "commands": ["measure", "compute", "cancel", "status", "forget", "shutdown"],
   "errorCodes": ["BAD_REQUEST", "UNKNOWN_COMMAND", "INVALID_PROFILE", "BUSY",
                  "DEVICE_NOT_FOUND", "NO_READING", "BLUETOOTH_UNAVAILABLE",
                  "PERMISSION_DENIED", "TRANSPORT_FAILED", "CANCELLED", "INTERNAL"],
@@ -294,6 +294,52 @@ Cancel with nothing running is a `BAD_REQUEST` and is harmless.
 ```
 
 Cheap. Poll it freely; it touches no hardware.
+
+### `compute` — interpret a reading taken earlier
+
+`derived` is a pure function of `measured` and the profile. A reading captured
+without a profile loses nothing; it has simply not been interpreted yet.
+
+```jsonc
+{
+  "id": "c1",
+  "cmd": "compute",
+  "measured": { "weightKg": 97.9, "impedanceOhm": 529.9 },   // required
+  "profile": { "age": 39, "heightCm": 180, "sex": "male" },  // required
+  "measuredAt": "2026-09-05T09:12:34.583Z",                  // optional, carried through
+  "model": "Dr Trust SSW532"                                 // optional, carried through
+}
+```
+
+Answered with a `measurement` envelope of exactly the same shape, carrying
+`"source": "recomputed"`. **It is byte-identical to what a live measurement with
+that profile would have produced**, apart from timing and provenance, so a host
+needs only one renderer.
+
+No radio is touched. It answers immediately, and works with no scale present.
+
+`timestamp` is when it was computed; `measuredAt` is when the scale was read, if
+you passed it. The two are never conflated.
+
+### Capturing before you know the profile
+
+The scale's radio sleeps within seconds of going idle, so the weight must be
+taken the moment it settles. A person's age can be asked at leisure.
+
+```jsonc
+{ "id": "m1", "cmd": "measure", "withoutProfile": true }
+```
+
+This returns `measured` with an empty `derived`, `profileDeferred: true` and
+`profile: null`. Store `measured`, ask for the age whenever suits, then send it
+to `compute`.
+
+**This is opt-in on purpose.** A `measure` with no `profile` and no
+`withoutProfile` is still rejected with `INVALID_PROFILE`, because a host that
+simply forgot is the commoner bug. Sending both is a `BAD_REQUEST`.
+
+One reading can be recomputed as often as you like — to fix a typo in an age,
+or to show the same weight interpreted for two different people.
 
 ### `forget`
 

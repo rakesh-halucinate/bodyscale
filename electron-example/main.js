@@ -130,6 +130,32 @@ ipcMain.handle('scale:measure', async (_event, profile) => {
   }
 });
 
+/**
+ * Capture a reading before the profile is known.
+ *
+ * Use this when the user steps on the scale before filling in their details:
+ * the weight is taken while the radio is awake, and interpreted afterwards.
+ */
+ipcMain.handle('scale:measureWithoutProfile', async (_event, options) => {
+  if (!client || !client.running) {
+    return { ok: false, code: 'TRANSPORT_FAILED', message: 'the scale service is not running' };
+  }
+  try { return { ok: true, result: await client.measureWithoutProfile(options || {}) }; }
+  catch (err) { return { ok: false, code: err.code || 'INTERNAL', message: err.message, detail: err.detail }; }
+});
+
+/**
+ * Interpret a reading taken earlier, once the profile is available.
+ * Returns exactly what a live measurement with that profile would have.
+ */
+ipcMain.handle('scale:compute', async (_event, measured, profile, context) => {
+  if (!client || !client.running) {
+    return { ok: false, code: 'TRANSPORT_FAILED', message: 'the scale service is not running' };
+  }
+  try { return { ok: true, result: await client.compute(measured, profile, context || {}) }; }
+  catch (err) { return { ok: false, code: err.code || 'INTERNAL', message: err.message, detail: err.detail }; }
+});
+
 ipcMain.handle('scale:cancel', async () => {
   if (!client || !client.running) return { ok: false, code: 'TRANSPORT_FAILED' };
   try { await client.cancel(); return { ok: true }; }
