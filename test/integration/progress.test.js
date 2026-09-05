@@ -451,3 +451,44 @@ test('INT-PROG-22  progress is never mistakable for a terminal reply', async () 
   assert.strictEqual(settling.length, 1, 'exactly one terminal event settled the request');
   assert.strictEqual(settling[0].type, 'measurement', 'and it was the measurement');
 });
+
+// Prevents: the number moving after the scale has said it is done. The 0xFFB2
+// stream does not stop when a reading locks — the scale keeps repeating frames,
+// and a shift of stance while its impedance program runs will send a different
+// weight. Without this the displayed figure creeps after settling, and the
+// recorded result is whatever happened to arrive last rather than what the
+// scale locked.
+test('INT-PROG-23  a locked weight is frozen and later drift is ignored', async () => {
+  const f = H.fixture('freeze', [
+    { t: 'log', level: 'info', msg: 'scanning for SSW533' },
+    { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
+    { t: 'services', items: [{ service: '0000ffb0-0000-1000-8000-00805f9b34fb',
+      char: '0000ffb2-0000-1000-8000-00805f9b34fb', props: ['notify'] }] },
+    { t: 'ready' },
+    // status 0x01 = settling, status 0x00 = final.
+    { t: 'frame', uuid: FFB2, hex: '01 00 07 00 a2 01 00 01 78 f4 00 10' },  // 96.5 settling
+    { t: 'frame', uuid: FFB2, hex: '02 00 07 00 a2 00 00 01 78 f4 00 0f' },  // 96.5 LOCKED
+    { t: 'frame', uuid: FFB2, hex: '03 00 07 00 a2 00 00 01 6f f8 00 0b' },  // 94.2 drift
+    { t: 'frame', uuid: FFB2, hex: '04 00 07 00 a2 00 00 01 8d 12 00 03' },  // 101.6 drift
+  ]);
+
+  const { events, stderr } = await H.serve({
+    replay: f,
+    env: { REPLAY_HOLD_MS: '1500' },
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'F', cmd: 'measure', profile: H.PROFILE }); return false; }
+      return (ev.type === 'measurement' || ev.type === 'error') && ev.id === 'F';
+    },
+  });
+
+  const m = events.find((e) => e.type === 'measurement');
+  assert.ok(m, `expected a measurement, saw [${events.map((e) => e.type).join(', ')}]`);
+  assert.strictEqual(m.measured.weightKg, 96.5, 'the result is what the scale locked');
+
+  const streamed = H.byType(events, 'progress')
+    .filter((p) => typeof p.weightKg === 'number').map((p) => p.weightKg);
+  assert.ok(streamed.length >= 2, 'weights did stream');
+  assert.deepStrictEqual([...new Set(streamed)], [96.5],
+    'and every one of them is the locked value, never the drift');
+  assert.match(stderr, /ignoring 94\.2 kg/, 'the ignored drift is reported, not silently dropped');
+});

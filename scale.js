@@ -371,7 +371,24 @@ function measureOnce(opts) {
     const feed = (values) => {
       if (!values || capture.settled) return;
       capture.frames++;
-      if (values.weight > 0) capture.weight = values.weight;
+      /*
+       * Freeze the weight the moment the scale says it is final.
+       *
+       * The 0xFFB2 stream does not stop when the reading locks: the scale keeps
+       * repeating frames, and a shift of stance while the impedance program
+       * runs moves the number after it was supposed to have settled. The status
+       * byte is the scale's own statement that it is done, so it is taken as
+       * final and nothing later is allowed to change it.
+       *
+       * A NEW measurement clears finalSeen, so this only freezes within one.
+       */
+      if (values.weight > 0 && !capture.finalSeen) capture.weight = values.weight;
+      else if (values.weight > 0 && capture.finalSeen && values.weight !== capture.weight) {
+        note(`  ignoring ${values.weight} kg: the scale already locked ${capture.weight} kg`);
+      }
+      // Set AFTER the weight above, so the frame that carries the lock is
+      // allowed to deliver the value it is locking. Only later frames freeze.
+      if (values.state === 'final') capture.finalSeen = true;
       /*
        * The scale sends a record frame the moment weight settles, and again
        * after its own impedance program has run — the one the display calls
@@ -403,7 +420,7 @@ function measureOnce(opts) {
                  message: 'Stand still. The scale is still measuring.' });
         }
       }
-      if (values.state === 'final') capture.finalSeen = true;
+
       if (capture.weight > 0) {
         note(`  reading ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} ohm` : ''}`
              + `${capture.finalSeen ? ' (settled)' : ' (settling)'}`);
