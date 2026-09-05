@@ -171,6 +171,31 @@ async function main() {
   let lastHint = null;
   client.on('hint', (h) => { lastHint = h; clearLive(); say(`  ${C.amber}>> ${h.message}${C.off}`); });
 
+  /*
+   * The link diary.
+   *
+   * Four runs against the real scale told us nothing about why it never starts
+   * its impedance program, because the part that would say so goes to stderr
+   * and was never shown here. That matters more than it sounds: the driver
+   * gives up silently when no session id arrives —
+   *
+   *     if (st.session === null) return;      // drivers.js, sendProfile
+   *
+   * — so "the scale ignored our handshake" and "we never sent one" look
+   * identical from this screen. They are opposite faults with opposite fixes,
+   * and guessing between them is what cost those four runs.
+   *
+   * So the lines that decide it are shown: the session frame, each write, and
+   * any write the transport could not deliver. --verbose shows everything.
+   */
+  const DIARY = /session|wrote|write .*fail|cannot write|subscrib|impedance|record channel|Dr Trust|error/i;
+  const VERBOSE = argv.includes('--verbose');
+  client.on('log', (line) => {
+    const s = String(line).replace(/\s+$/, '');
+    if (!s.trim()) return;
+    if (VERBOSE || DIARY.test(s)) { clearLive(); say(`  ${C.dim}· ${s.trim()}${C.off}`); }
+  });
+
   try {
     const hello = await client.start();
     say(`  service ${hello.version}, protocol ${hello.proto}, on ${hello.platform}`);
