@@ -65,10 +65,12 @@ const CHATTER = { t: 'log', level: 'info', msg: 'still listening' };
 const NO_MATCH = { t: 'log', level: 'debug', msg: 'no match yet' };
 /** A 0xFFB2 live-weight frame: status 0x01 (settling), 69.25 kg. */
 const WEIGHT_FRAME = { t: 'frame', uuid: FFB2, hex: '3e 00 07 00 a2 01 00 01 0e 82 00 14' };
-/** The 0xFFB3 record frame from the real recording: 97.9 kg and 529.9 ohm at once. */
+/** The 0xFFB3 weight record, subtype 0x00: 97.9 kg, no impedance. */
 const RECORD_FRAME = { t: 'frame', uuid: FFB3,
-  hex: '30 00 23 00 a7 00 00 14 b3 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 '
+  hex: '30 00 23 00 a7 00 00 00 00 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 '
      + '00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08' };
+/** Subtype 0x01: the impedances, summing to 529.9 ohm. */
+const IMPEDANCE_FRAME = { t: 'frame', uuid: FFB3, hex: '31 00 23 01 a7 00 00 e5 06 e7 06 e7 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02' };
 
 /**
  * Connected, subscribed, and then nothing. The recording deliberately carries
@@ -106,7 +108,7 @@ const advertisedThenQuiet = (tag) => H.fixture(tag, [
  * measurement completes the moment it lands instead of waiting out a hold.
  */
 const slowButGood = (tag) => H.fixture(tag,
-  [SCANNING, DEVICE, SERVICES, READY, CHATTER, CHATTER, RECORD_FRAME]);
+  [SCANNING, DEVICE, SERVICES, READY, CHATTER, CHATTER, RECORD_FRAME, IMPEDANCE_FRAME]);
 
 /* -------------------------------------------------------------- driving ---- */
 

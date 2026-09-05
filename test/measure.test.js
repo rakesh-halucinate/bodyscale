@@ -18,6 +18,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const FRAMES = {
   settling: '2f 00 07 00 a2 01 00 01 13 32 00 09',
   record:   '06 00 23 00 a7 00 00 0c 0e 25 01 80 c4 00 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 15',
+  // Subtype 0x01: the impedances, three little-endian uint16 in tenths of an
+  // ohm — trunk, right leg, left leg — summing to 308.6. The 0x00 frame above
+  // carries a weight and a timestamp, and never an impedance.
+  impedance: '07 00 23 01 a7 00 00 04 04 05 04 05 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
+  // 1300.0 ohm, all in the trunk slot: a real number, but outside the plausible
+  // band, so the trust rules reject the panel it produces.
+  impedanceBad: '08 00 23 01 a7 00 00 c8 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
   final:    '76 00 07 00 a2 00 00 01 80 c4 00 07',
 };
 
@@ -283,7 +290,8 @@ test('one press of Measure captures weight and impedance and renders the full pa
   const measuring = h.nodes.btnMeasure.onclick();
   await sleep(120);
   h.emit('ffb2', FRAMES.settling);
-  h.emit('ffb3', FRAMES.record);        // carries both numbers; completes the capture
+  h.emit('ffb3', FRAMES.record);        // the weight
+  h.emit('ffb3', FRAMES.impedance);     // and the impedance, on its own frame
   await measuring;
 
   assert.equal(h.nodes.results.hidden, false, 'result panel is shown');
@@ -306,6 +314,7 @@ test('the panel labels every number as measured, derived or approximate', async 
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
   h.emit('ffb3', FRAMES.record);
+  h.emit('ffb3', FRAMES.impedance);
   await m;
   const out = h.nodes.results.innerHTML;
   assert.ok(out.includes('tag measured'), 'weight is marked as measured');
@@ -321,6 +330,7 @@ test('an untrustworthy body fat figure is called out on the panel', async () => 
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
   h.emit('ffb3', FRAMES.record);
+  h.emit('ffb3', FRAMES.impedanceBad);
   await m;
   assert.match(h.nodes.results.innerHTML, /not trustworthy in absolute terms/);
   assert.match(h.nodes.results.innerHTML, /foot-to-foot/);

@@ -77,8 +77,24 @@ function recordFrameHex(impedanceTenths, grams) {
     for (let i = width - 1; i >= 0; i--) out.push(((n >>> (8 * i)) & 0xff).toString(16).padStart(2, '0'));
     return out.join(' ');
   };
-  return ['30 00 23 00 a7 00 00', be(impedanceTenths, 2), '25', be(grams, 3), '00 0a',
+  // Subtype 0x00: weight and a timestamp. It carries no impedance — the bytes
+  // once read as one are the low half of that timestamp.
+  return ['30 00 23 00 a7 00 00 00 00 25', be(grams, 3), '00 0a',
     new Array(24).fill('00').join(' '), '08'].join(' ');
+}
+
+/**
+ * Subtype 0x01: the impedances.
+ *
+ * Three little-endian uint16 in tenths of an ohm — trunk, right leg, left leg —
+ * and the whole-body figure is their sum. Everything is put in the trunk slot
+ * here because only the total matters to these cases.
+ */
+function impedanceFrameHex(impedanceTenths) {
+  const le = (n) => [(n & 0xff), ((n >>> 8) & 0xff)]
+    .map((x) => x.toString(16).padStart(2, '0')).join(' ');
+  return ['31 00 23 01 a7 00 00', le(impedanceTenths), '00 00 00 00 00 00',
+    new Array(26).fill('00').join(' '), '02'].join(' ');
 }
 
 /** A minimal replay fixture carrying exactly one measurement record. */
@@ -87,6 +103,7 @@ function recordFixture(tag, impedanceTenths, grams) {
     { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
     { t: 'ready' },
     { t: 'frame', uuid: '0000ffb3-0000-1000-8000-00805f9b34fb', hex: recordFrameHex(impedanceTenths, grams) },
+    { t: 'frame', uuid: '0000ffb3-0000-1000-8000-00805f9b34fb', hex: impedanceFrameHex(impedanceTenths) },
     { t: 'end', reason: 'finished' },
   ]);
 }

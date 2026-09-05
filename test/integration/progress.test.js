@@ -20,13 +20,25 @@ const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready', 'settling', 'se
 const RECORDED_ADDRESS = 'BEECC6EC-BD30-3EAC-B148-4833628A8A58';
 
 /** Every live weight the recorded session streams, in order. Deterministic. */
-const RECORDED_WEIGHTS = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9];
+/*
+ * The live weights the recording streams, in order.
+ *
+ * The last entry repeats 97.9 because the subtype 0x01 impedance frame arrives
+ * after the weight has settled: it carries no weight of its own, so the held
+ * one is streamed again alongside the impedance.
+ */
+const RECORDED_WEIGHTS = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9, 97.9];
 
 const FFB2 = '0000ffb2-0000-1000-8000-00805f9b34fb';
 const FFB3 = '0000ffb3-0000-1000-8000-00805f9b34fb';
-/** The 0xFFB3 record frame that carries 97.9 kg and 529.9 ohm. */
-const RECORD_FRAME = '30 00 23 00 a7 00 00 14 b3 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 00 '
+/**
+ * The 0xFFB3 weight record, subtype 0x00: 97.9 kg. It carries NO impedance —
+ * the bytes once read as one are the low half of a device timestamp.
+ */
+const RECORD_FRAME = '30 00 23 00 a7 00 00 00 00 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 00 '
   + '00 00 00 00 00 00 00 00 00 00 00 00 00 00 08';
+/** Subtype 0x01: trunk, right leg, left leg, summing to 529.9 ohm. */
+const IMPEDANCE_FRAME = '31 00 23 01 a7 00 00 e5 06 e7 06 e7 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02';
 /** A 0xFFB2 live-weight frame: status 0x01 (settling), 69.25 kg. */
 const SETTLING_FRAME = '3e 00 07 00 a2 01 00 01 0e 82 00 14';
 
@@ -107,7 +119,8 @@ test('INT-PROG-04  every emitted phase is one of the six known phases', async ()
 test('INT-PROG-05  every settling event carries a finite positive weightKg', async () => {
   const { events } = await measureAs('W3');
   const settling = H.byType(events, 'progress').filter((p) => p.phase === 'settling');
-  assert.strictEqual(settling.length, 7, 'the recorded session streams seven settling events');
+  assert.strictEqual(settling.length, 8,
+    'seven weight frames plus the impedance frame, which streams the held weight again');
   for (const p of settling) {
     assert.strictEqual(typeof p.weightKg, 'number', `weightKg type for "${p.message}"`);
     assert.ok(Number.isFinite(p.weightKg), `weightKg is finite: ${p.weightKg}`);
@@ -122,7 +135,8 @@ test('INT-PROG-06  several distinct live weights stream during one measurement',
   const { events } = await measureAs('W4');
   const weights = weightEvents(events).map((p) => p.weightKg);
   assert.deepStrictEqual(weights, RECORDED_WEIGHTS, 'the recorded live weight sequence');
-  assert.strictEqual(new Set(weights).size, 7, 'all seven are distinct');
+  assert.strictEqual(new Set(weights).size, 7,
+    'seven distinct weights; the impedance frame repeats the last one');
 });
 
 // Prevents: the live number ending on a value the result panel then contradicts,
@@ -385,7 +399,7 @@ test('INT-PROG-19  a locked reading is streamed as the settled phase', async () 
 test('INT-PROG-20  impedanceOhm is null until it arrives, then numeric on the last event', async () => {
   const { events } = await measureAs('IM');
   const weights = weightEvents(events);
-  assert.strictEqual(weights.length, 7, 'seven weight events');
+  assert.strictEqual(weights.length, 8, 'seven weight frames plus the impedance frame');
   for (const p of weights.slice(0, 6)) {
     assert.strictEqual(p.impedanceOhm, null, `impedance is null at ${p.weightKg} kg`);
   }

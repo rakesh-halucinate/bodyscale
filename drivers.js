@@ -257,10 +257,61 @@
       }
       const cmd = b[q + 2];
       st.live = cmd === 0xa3 || cmd === 0xa7;
-      const rawZ = be16(q + 5);
+      /*
+       * Bytes [q+3 .. q+6] are a 32-bit Unix timestamp, NOT an impedance.
+       *
+       * This was read as a 16-bit impedance at [q+5] for the whole life of this
+       * driver, and it was wrong. Two live captures settled it: the field held
+       * 0x6a9bfff7 and 0x6a9c0217, which are 2026-09-05T11:41:43Z and
+       * 11:50:47Z — the exact moments those measurements were taken. The scale
+       * echoes back the timestamp sent to it in the profile packet.
+       *
+       * Before the handshake was implemented no timestamp was ever sent, so the
+       * field held uninitialised bytes. In one recording those happened to be
+       * 0x000014b3, which divided by ten looks exactly like a plausible 529.9 Ω.
+       * That coincidence is why the error survived so long.
+       *
+       * So this frame carries a timestamp and a weight and nothing else. No
+       * impedance is reported from it. A body composition panel built on a
+       * clock reading is worse than no panel at all.
+       */
+      /*
+       * Frame type 0x23 has SUBTYPES, at [q+1], and they carry different things:
+       *
+       *   0x00  weight, a device timestamp, and a validity flag
+       *   0x01  the impedances: three little-endian uint16 in tenths of an ohm,
+       *         trunk then right leg then left leg. Whole body is their sum.
+       *   0x02  end of record
+       *
+       * Only the 0x00 frame was ever parsed here, and its timestamp bytes were
+       * read as a 16-bit impedance. Two live captures proved it: the field held
+       * 2026-09-05T11:41:43Z and 11:50:47Z, the exact moments of the readings.
+       * One old recording happened to hold 0x000014b3 there, which divided by
+       * ten looks exactly like a plausible 529.9 ohm, and that coincidence hid
+       * the mistake.
+       *
+       * Layout confirmed against the openScale SSW532 handler, which is the
+       * same protocol family one model down. Offsets there are one lower than
+       * here, because this firmware carries an extra leading header byte.
+       */
+      const subtype = b[q + 1];
+      const stamp = ((b[q + 3] << 24) >>> 0) + (b[q + 4] << 16) + (b[q + 5] << 8) + b[q + 6];
       const grams = be24(q + 8);
       const kg = grams / 1000;
-      const ohm = Math.round(rawZ) / 10;
+      const valid = b[q + 13] === 0x01;
+
+      // Little-endian, unlike the weight, which is big-endian in the same frame.
+      const le16 = (i) => (b[i + 1] << 8) | b[i];
+      let ohm = 0;
+      if (subtype === 0x01) {
+        const trunk = le16(q + 5) / 10;
+        const rightLeg = le16(q + 7) / 10;
+        const leftLeg = le16(q + 9) / 10;
+        ohm = trunk + rightLeg + leftLeg;
+        st.segments = { trunk, rightLeg, leftLeg };
+        ctx.log(`  Dr Trust: impedance frame — trunk ${trunk} Ω, right leg ${rightLeg} Ω, `
+              + `left leg ${leftLeg} Ω, whole body ${Math.round(ohm * 10) / 10} Ω`, 'ok');
+      }
       const csOk = drTrust.checksumOk(b);
       const res = {
         characteristic: 'Dr Trust measurement record',
@@ -268,16 +319,43 @@
         raw: BCS.hex(b), units: 'SI', flagBits: [], warnings: [],
         fields: [
           field('Command', q + 2, 1, '0x' + cmd.toString(16), '', st.live ? 'live measurement' : 'cached replay'),
-          Object.assign(field('Impedance', q + 5, 2, ohm, 'Ω', `raw ${rawZ}, big-endian, tenths of an ohm`), { rawHex: BCS.hex(b.slice(q + 5, q + 7)) }),
-          Object.assign(field('Weight', q + 8, 3, kg, 'kg', `${grams} g, big-endian 24-bit`), { rawHex: BCS.hex(b.slice(q + 8, q + 11)) }),
+          Object.assign(field('Impedance', q + 5, 6,
+            subtype === 0x01 ? Math.round(ohm * 10) / 10 : null, 'Ω',
+            subtype === 0x01
+              ? `trunk + right leg + left leg, three little-endian uint16 in tenths of an ohm`
+              : 'not present: this subtype carries a timestamp here, not an impedance'),
+          { rawHex: BCS.hex(b.slice(q + 5, q + 11)) }),
+          Object.assign(field('Weight', q + 8, 3, subtype === 0x00 ? kg : null, 'kg',
+          subtype === 0x00 ? `${grams} g, big-endian 24-bit` : 'not present in an impedance frame'),
+        { rawHex: BCS.hex(b.slice(q + 8, q + 11)) }),
           field('Checksum', b.length - 1, 1, '0x' + b[b.length - 1].toString(16).padStart(2, '0'), '', csOk ? 'valid' : 'INVALID'),
         ],
-        values: { weight: kg, impedanceOhm: ohm },
+        values: {
+          weight: subtype === 0x00 ? kg : undefined,
+          impedanceOhm: ohm > 0 ? Math.round(ohm * 10) / 10 : null,
+          subtype,
+          valid,
+          deviceTimestamp: stamp > 1600000000 && stamp < 2200000000 ? stamp : null,
+        },
       };
       if (!csOk) res.warnings.push('Checksum mismatch — frame may be corrupt.');
-      if (!(kg > 0)) { res.warnings.push('Record carries no weight.'); return res; }
-      if (ohm > 0 && ohm < 1500) { st.impedanceOhm = ohm; st.weightKg = kg; }
-      else res.warnings.push(`Impedance ${ohm} ohm is outside a believable range; ignoring it.`);
+      /*
+       * Only the 0x00 frame carries a weight. In the 0x01 frame those same
+       * bytes are the second and third impedances, so reading a weight there
+       * produces a nonsense mass and overwrites the real one.
+       */
+      if (subtype === 0x00) {
+        if (!(kg > 0)) { res.warnings.push('Record carries no weight.'); return res; }
+        st.weightKg = kg;
+      }
+      if (ohm > 0) {
+        st.impedanceOhm = Math.round(ohm * 10) / 10;
+      } else if (subtype === 0x00 && !valid) {
+        // The scale itself is saying this reading carries no body composition.
+        res.warnings.push('The scale marked this measurement invalid: it took a weight but no '
+          + 'impedance. Its own program has to run for that, and it did not. Stand with bare '
+          + 'feet on all four metal pads and stay still until the display stops changing.');
+      }
       if (!st.live) res.warnings.push(`Replayed from the scale's memory (command 0x${cmd.toString(16)}), not measured live.`);
       if (st.impedanceOhm) drTrust.attachBia(res, st, ctx);
       return res;

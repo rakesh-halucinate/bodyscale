@@ -12,18 +12,24 @@ cat <<'INTRO'
 
   RAW FRAME CAPTURE
 
-  Do this exactly, because contact is what we are testing:
+  THE ORDER MATTERS THIS TIME.
 
-    1. Bare feet. No socks.
-    2. If your soles are dry, dampen them slightly. Dry skin reads as a
-       near-open circuit, which is what a 1900 ohm reading looks like.
-    3. Stand still with BOTH feet flat, each foot touching BOTH metal pads.
-    4. Stay on until it finishes.
+    1. Step on FIRST and let the weight settle before anything else.
+    2. Bare feet, both flat, each foot touching BOTH metal pads.
+    3. Then STAND STILL and wait. The display will show P-1 and hold for
+       about ten seconds while the scale measures impedance.
+    4. Do not step off until the terminal says it has captured.
 
-  AT THE SAME TIME, note what the scale's OWN display shows: the weight, and
-  the body fat percentage if it gives one. That is the comparison that settles
-  this. If the scale shows a sensible body fat and we do not, the fault is
-  ours. If the scale also refuses or shows nothing, the contact is the fault.
+  You will probably see this, and it is the tool working, not failing:
+
+      impedance NNNN is outside the physical band; the scale's own program
+      has not finished. Stand still - waiting for the real reading.
+
+  That is the placeholder the scale sends the moment weight settles. The real
+  reading comes after P-1 finishes.
+
+  Note what the scale's OWN display shows as it cycles: weight, body fat,
+  BMI, muscle.
 
 INTRO
 

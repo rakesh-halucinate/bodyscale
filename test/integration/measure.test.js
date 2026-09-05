@@ -41,7 +41,14 @@ const GOLDEN_DERIVED = {
 };
 
 /** Weight ladder the recorded session streams, in order, before it settles. */
-const WEIGHT_LADDER = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9];
+/*
+ * The live weights the recording streams, in order.
+ *
+ * 97.9 appears twice: the subtype 0x01 impedance frame arrives after the weight
+ * has settled and carries no weight of its own, so the held one streams again
+ * alongside the impedance.
+ */
+const WEIGHT_LADDER = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9, 97.9];
 
 /** The recorded device, as the transport reports it. */
 const RECORDED_ADDRESS = 'BEECC6EC-BD30-3EAC-B148-4833628A8A58';
@@ -61,18 +68,22 @@ const OMITTED_KEYS = [
 /** The recorded session with the settling impedance moved outside 150–1200 Ω. */
 function fixtureWithUntrustworthyImpedance(tag) {
   const events = fs.readFileSync(H.FIXTURE, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  const record = events.filter((e) => e.t === 'frame' && / 23 /.test(' ' + e.hex + ' ') && e.hex.includes('14 b3')).pop();
-  assert.ok(record, 'the recorded session still contains the 529.9 ohm record frame');
-  // [q+5..q+6] is impedance, big-endian tenths of an ohm. 0x32c8 = 13000 = 1300.0 Ω,
-  // still inside the driver's own 0–1500 Ω sanity gate but outside BIA's T2 band.
-  record.hex = record.hex.replace('14 b3', '32 c8');
+  // The impedance lives in the subtype 0x01 frame, as three little-endian
+  // uint16 in tenths of an ohm. Putting 13000 in the trunk slot and zeroing the
+  // legs gives a whole-body 1300.0 Ω: outside the plausible band, so the trust
+  // rules reject it, but a real number rather than a sentinel.
+  const record = events.filter((e) => e.t === 'frame' && /23 01 a7/.test(e.hex)).pop();
+  assert.ok(record, 'the recorded session still contains a subtype 0x01 impedance frame');
+  const le = (n) => [(n & 0xff), ((n >>> 8) & 0xff)]
+    .map((x) => x.toString(16).padStart(2, '0')).join(' ');
+  record.hex = record.hex.replace('e5 06 e7 06 e7 06', `${le(13000)} 00 00 00 00`);
   return H.fixture(tag, events);
 }
 
 // A measurement that never arrives, or arrives out of order, leaves the Electron
 // app spinning on "stand on the scale" for ever. This pins the whole exchange:
 // greeting, acknowledgement, live progress, then exactly one answer.
-test('INT-MEAS-01  a measure produces hello, accepted, nine progress events and one measurement, in that order', async () => {
+test('INT-MEAS-01  a measure produces hello, accepted, ten progress events and one measurement, in that order', async () => {
   const { events, terminal } = await H.measureOnce({});
   const types = events.map((e) => e.type);
   const upToTerminal = types.slice(0, types.indexOf('measurement') + 1);
@@ -80,7 +91,7 @@ test('INT-MEAS-01  a measure produces hello, accepted, nine progress events and 
   assert.deepStrictEqual(upToTerminal, [
     'hello', 'accepted',
     'progress', 'progress', 'progress', 'progress', 'progress',
-    'progress', 'progress', 'progress', 'progress',
+    'progress', 'progress', 'progress', 'progress', 'progress',
     'measurement',
   ]);
   assert.strictEqual(H.byType(events, 'measurement').length, 1, 'exactly one terminal event');
@@ -98,7 +109,8 @@ test('INT-MEAS-02  progress reports connected, ready and each settling weight, t
   const { progress } = await H.measureOnce({});
 
   assert.deepStrictEqual(progress.map((p) => p.phase),
-    ['connected', 'ready', 'settling', 'settling', 'settling', 'settling', 'settling', 'settling', 'settling']);
+    ['connected', 'ready', 'settling', 'settling', 'settling', 'settling', 'settling',
+      'settling', 'settling', 'settling']);
   for (const p of progress) {
     assert.strictEqual(p.id, 'M1', 'every progress event carries the request id');
     assert.strictEqual(p.proto, 1);
@@ -111,7 +123,10 @@ test('INT-MEAS-02  progress reports connected, ready and each settling weight, t
 
   const weights = progress.filter((p) => p.phase === 'settling');
   assert.deepStrictEqual(weights.map((p) => p.weightKg), WEIGHT_LADDER);
-  assert.deepStrictEqual(weights.slice(0, -1).map((p) => p.impedanceOhm), [null, null, null, null, null, null]);
+  // Every weight frame carries a null impedance. Only the last event, driven by
+  // the subtype 0x01 frame, has one.
+  assert.deepStrictEqual(weights.slice(0, -1).map((p) => p.impedanceOhm),
+    [null, null, null, null, null, null, null]);
   assert.strictEqual(weights[weights.length - 1].impedanceOhm, H.EXPECTED.impedanceOhm);
 });
 

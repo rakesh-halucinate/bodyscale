@@ -63,6 +63,18 @@ const REAL = {
   record:    '06 00 23 00 a7 00 00 0c 0e 25 01 80 c4 00 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 15',
   recordMid: '04 00 23 00 a7 00 00 0b ef 25 01 6b ac 00 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08',
   setup:     '03 00 1d 00 aa 33 71 1e 1a 64 25 01 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 44 00 00 00 00 00 00 1e',
+  /*
+   * Frame type 0x23 has subtypes. 0x00 carries weight and a timestamp; 0x01
+   * carries the impedances, as three little-endian uint16 in tenths of an ohm —
+   * trunk, right leg, left leg — whose sum is the whole-body figure.
+   *
+   * The `record` frames above are subtype 0x00, and their bytes [7][8] are the
+   * low half of that timestamp. Reading them as a big-endian impedance is what
+   * this driver did for a long time, and it is why one recording appeared to
+   * carry a perfectly plausible 529.9 ohm that was really a clock.
+   */
+  impedance:    '07 00 23 01 a7 00 00 04 04 05 04 05 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
+  impedanceMid: '05 00 23 01 a7 00 00 f8 03 f9 03 f9 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1b',
 };
 const feed = async (hexes) => {
   const ctx = makeCtx();
@@ -126,23 +138,41 @@ test('stepping back on after a final reading starts a fresh measurement', async 
   assert.equal(out[4].values.state, 'final', 'a new final is reported, not suppressed');
 });
 
-test('the real record frame yields 98.50 kg and 308.6 ohm', async () => {
+test('the real record frame yields 98.50 kg and no impedance', async () => {
+  // Subtype 0x00 carries a weight and a timestamp. It has never carried an
+  // impedance; the bytes once read as one are the low half of that timestamp.
   const { out } = await feed([REAL.record]);
   const r = out[0];
   assert.equal(r.values.weight, 98.5);
-  assert.equal(r.values.impedanceOhm, 308.6);
+  assert.equal(r.values.impedanceOhm, null, 'a weight frame carries no impedance');
+  assert.equal(r.values.subtype, 0x00);
+});
+
+test('the impedance frame yields 308.6 ohm as three segments', async () => {
+  const { out } = await feed([REAL.impedance]);
+  const r = out[0];
+  assert.equal(r.values.subtype, 0x01);
+  assert.equal(r.values.impedanceOhm, 308.6, 'trunk plus right leg plus left leg');
+  assert.equal(r.values.weight, undefined, 'and no weight: those bytes are impedance here');
   assert.equal(r.fields.find((f) => f.name === 'Impedance').unit, 'Ω');
 });
 
-test('the mid-measurement record frame decodes its own weight and impedance', async () => {
+test('the mid-measurement record frame decodes its own weight', async () => {
   const { out } = await feed([REAL.recordMid]);
   assert.equal(out[0].values.weight, 93.1);
-  assert.equal(out[0].values.impedanceOhm, 305.5);
+  assert.equal(out[0].values.impedanceOhm, null, 'a weight frame never carries one');
+});
+
+test('the mid-measurement impedance frame decodes its own segments', async () => {
+  const { out } = await feed([REAL.impedanceMid]);
+  assert.equal(out[0].values.impedanceOhm, 305, 'trunk plus both legs');
 });
 
 test('a record frame carrying impedance drives derived body composition', async () => {
-  const { out } = await feed([REAL.record]);
-  const r = out[0];
+  // The impedance arrives on its own frame; body composition appears once the
+  // driver has both that and a weight.
+  const { out } = await feed([REAL.record, REAL.impedance]);
+  const r = out[out.length - 1];
   assert.ok(r.values.bodyFatPercent !== undefined, 'body composition is derived');
   assert.ok(r.values.bodyFatPercentBmiAnchor !== undefined, 'the impedance-free body fat anchor is included');
   assert.ok(r.warnings.some((w) => /did not survive their range checks/.test(w)),
@@ -233,15 +263,16 @@ test('fat-free mass never uses the reactance-dependent equation this scale canno
 });
 
 test('impedance from the record frame is carried onto the later final-weight panel', async () => {
-  const { out } = await feed([REAL.record, REAL.finalW]);
-  const final = out[1];
+  const { out } = await feed([REAL.record, REAL.impedance, REAL.finalW]);
+  const final = out[out.length - 1];
   assert.equal(final.values.weight, 98.5);
   assert.equal(final.values.impedanceOhm, 308.6, 'the final view must not lose the impedance');
   assert.ok(final.fields.some((f) => f.name === 'Impedance' && f.value === 308.6));
 });
 
 test('the full real weigh-in sequence ends on 98.50 kg with 308.6 ohm', async () => {
-  const { out } = await feed([REAL.setup, REAL.idle, REAL.stepOn, REAL.rising, REAL.overshoot, REAL.recordMid, REAL.record, REAL.finalW]);
+  const { out } = await feed([REAL.setup, REAL.idle, REAL.stepOn, REAL.rising, REAL.overshoot,
+    REAL.recordMid, REAL.record, REAL.impedance, REAL.finalW]);
   const final = out[out.length - 1];
   assert.equal(final.values.weight, 98.5);
   assert.equal(final.values.impedanceOhm, 308.6);
