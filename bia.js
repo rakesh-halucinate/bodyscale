@@ -315,12 +315,12 @@
     if (out.trust.impedanceDerived) {
       const vendorBone = ffm * 0.0665;
       const vendorMuscle = ffm - vendorBone;
-      const vendorProtein = ffm * 0.2115;
       out.vendorMatch = {
-        note: "The full panel as this scale's own app reports it, from the same two "
-            + 'numbers. Provided so a host can show figures identical to the device. '
-            + 'These are the scale vendor\u2019s conventions, not the published '
-            + 'equations in `values`, and are never a substitute for them.',
+        note: "This scale's own app, as far as it has been reproduced from real "
+            + 'readings. Provided so a host can show figures identical to the device. '
+            + 'These are the vendor\u2019s conventions, not the published equations in '
+            + '`values`, and never a substitute for them. Confirmed against two '
+            + 'sessions; see `unresolved` for what two sessions could not settle.',
 
         // Everything the impedance genuinely determines. Both sides use Sun 2003
         // and the Wang 1999 hydration constant, so these already agree; they are
@@ -336,27 +336,36 @@
         // The values where the two conventions genuinely part company.
         bmrKcal: round(370 + 21.6 * ffm, 0),
         bmrBasis: 'Katch-McArdle, from lean mass. `values.bmrKcal` uses Mifflin-St Jeor.',
-        skeletalMuscleMassKg: round(ffm * 0.60, 2),
-        skeletalMuscleBasis: 'a flat 60% of fat-free mass. `values` uses Janssen 2000.',
         boneMassKg: round(vendorBone, 2),
         boneBasis: '6.65% of fat-free mass. Arbitrary on both sides.',
         muscleMassKg: round(vendorMuscle, 2),
         muscleMassPercent: round((vendorMuscle / W) * 100, 1),
         muscleBasis: 'fat-free mass minus their bone figure.',
-        proteinMassKg: round(vendorProtein, 2),
-        proteinBasis: '21.15% of fat-free mass. See `ambiguous` below.',
         idealWeightKg: round(22 * Hm * Hm, 1),
         idealWeightBasis: 'BMI 22 at this height, as a single figure rather than a range.',
 
         /*
-         * Fitted from ONE reading, so more than one formula reproduces it and
-         * they diverge elsewhere. Named rather than presented as settled.
+         * Fitted to one reading, then DISPROVEN by a second.
+         *
+         * Session A gave protein 12.40 kg on 58.62 kg of fat-free mass, and
+         * skeletal muscle 35.20 kg. Session B, eighteen minutes later, gave
+         * 12.10 kg on 58.23 kg, and 34.20 kg. Neither ratio held:
+         *
+         *   protein / fat-free          0.21153 -> 0.20780
+         *   skeletal muscle / fat-free  0.6005  -> 0.5873
+         *
+         * Both moved far more than rounding allows, so neither is a fixed
+         * fraction of fat-free mass, of weight, or of muscle mass. Two points
+         * are enough to rule those out and not enough to say what is true, so
+         * these are reported as unresolved rather than shipped as a number that
+         * would look authoritative and be wrong.
          */
-        ambiguous: {
-          proteinMassKg: 'Fat-free mass x 0.2115 and body weight x 0.1316 both reproduce '
-                       + 'the observed 12.40 kg exactly. They diverge at other weights, and '
-                       + 'one reading cannot separate them. A second at a clearly different '
-                       + 'weight would.',
+        unresolved: {
+          proteinMassKg: 'A fixed fraction of fat-free mass, of weight, and of muscle mass '
+                       + 'are all ruled out by two readings. A third at a clearly different '
+                       + 'weight would narrow it.',
+          skeletalMuscleMassKg: 'Same. `values.skeletalMuscleMassKg` uses Janssen 2000, which '
+                              + 'is published and fitted, and reads about 6 kg lower.',
         },
 
         /*

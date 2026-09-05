@@ -1,0 +1,502 @@
+profile: male, 39y, 180cm   saved address BEECC6EC-BD30-3EAC-B148-4833628A8A58
+(identifier is a CoreBluetooth UUID, specific to this Mac)
+transport ok: python 3.11.15, bleak 3.0.2
+  platform Darwin 24.0.0, python 3.11.15
+  scanning for SSW533 / BEECC6EC-BD30-3EAC-B148-4833628A8A58
+  >> Step on the scale to wake it, then wait a moment.
+  advertisement from SSW533 after 15904 ms (matched by name, rssi -54)
+device SSW533 at 19F45C09-9547-4B31-09C4-0A1EB022AFA5
+driver Dr Trust SSW532 / SSW533 (0xFFB0 icomon family)
+  Dr Trust driver: subscribing to the record channel 0xFFB3 and the live weight stream 0xFFB2.
+  Ready. Step on the scale. This firmware streams without a handshake.
+  connected in 1053 ms
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a23-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a24-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a25-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a26-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a27-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a28-0000-1000-8000-00805f9b34fb [read]
+  0000180a-0000-1000-8000-00805f9b34fb / 00002a29-0000-1000-8000-00805f9b34fb [read]
+  0000ffb0-0000-1000-8000-00805f9b34fb / 0000ffb1-0000-1000-8000-00805f9b34fb [write]
+  0000ffb0-0000-1000-8000-00805f9b34fb / 0000ffb2-0000-1000-8000-00805f9b34fb [notify]
+  0000ffb0-0000-1000-8000-00805f9b34fb / 0000ffb3-0000-1000-8000-00805f9b34fb [indicate]
+  00001530-1212-efde-1523-785feabcd123 / 00001531-1212-efde-1523-785feabcd123 [notify,write]
+  00001530-1212-efde-1523-785feabcd123 / 00001532-1212-efde-1523-785feabcd123 [write-without-response]
+  00001530-1212-efde-1523-785feabcd123 / 00001534-1212-efde-1523-785feabcd123 [read]
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 07 00 07 00 a2 01 00 00 2d 50 00 00
+    Dr Trust: weight frames aligned at marker offset 2; weight is a big-endian 24-bit gram count at byte 7.
+  Dr Trust — live weight (settling): {"weight":11.6,"state":"settling"}
+  reading 11.6 kg (settling)
+  frame 0000ffb3-0000-1000-8000-00805f9b34fb 8d 00 1d 00 aa 33 71 1e 1a 64 25 01 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 44 00 00 00 00 00 00 1e
+    Dr Trust: session frame (type 0x1d), session id 0x0.
+  -> wrote session ack to 0xffb1 (20 bytes)
+  Dr Trust session setup: {"sessionId":0}
+  reading 11.6 kg (settling)
+  -> wrote user profile to 0xffb1 (20 bytes)
+  -> wrote app name to 0xffb1 (20 bytes)
+  subscribed to 3 characteristic(s)
+ready — stand on the scale
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 08 00 07 00 a2 01 00 00 29 cc 00 18
+  Dr Trust — live weight (settling): {"weight":10.7,"state":"settling"}
+  reading 10.7 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 09 00 07 00 a2 01 00 00 25 e4 00 0c
+  Dr Trust — live weight (settling): {"weight":9.7,"state":"settling"}
+  reading 9.7 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0a 00 07 00 a2 01 00 00 20 6c 00 0f
+  Dr Trust — live weight (settling): {"weight":8.3,"state":"settling"}
+  reading 8.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0b 00 07 00 a2 01 00 00 18 38 00 13
+  Dr Trust — live weight (settling): {"weight":6.2,"state":"settling"}
+  reading 6.2 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0c 00 07 00 a2 01 00 00 18 06 00 01
+  Dr Trust — live weight (settling): {"weight":6.15,"state":"settling"}
+  reading 6.15 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0d 00 07 00 a2 01 00 00 18 06 00 01
+  Dr Trust — live weight (settling): {"weight":6.15,"state":"settling"}
+  reading 6.15 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0e 00 07 00 a2 01 00 00 1f 0e 00 10
+  Dr Trust — live weight (settling): {"weight":7.95,"state":"settling"}
+  reading 7.95 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 0f 00 07 00 a2 01 00 00 2d 50 00 00
+  Dr Trust — live weight (settling): {"weight":11.6,"state":"settling"}
+  reading 11.6 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 10 00 07 00 a2 01 00 00 35 84 00 1c
+  Dr Trust — live weight (settling): {"weight":13.7,"state":"settling"}
+  reading 13.7 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 11 00 07 00 a2 01 00 00 2b 8e 00 1c
+  Dr Trust — live weight (settling): {"weight":11.15,"state":"settling"}
+  reading 11.15 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 12 00 07 00 a2 01 00 00 1d e2 00 02
+  Dr Trust — live weight (settling): {"weight":7.65,"state":"settling"}
+  reading 7.65 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 13 00 07 00 a2 01 00 00 12 f2 00 07
+  Dr Trust — live weight (settling): {"weight":4.85,"state":"settling"}
+  reading 4.85 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 14 00 07 00 a2 01 00 00 12 c0 00 15
+  Dr Trust — live weight (settling): {"weight":4.8,"state":"settling"}
+  reading 4.8 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 15 00 07 00 a2 01 00 00 14 b4 00 0b
+  Dr Trust — live weight (settling): {"weight":5.3,"state":"settling"}
+  reading 5.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 16 00 07 00 a2 01 00 00 4c c2 00 11
+  Dr Trust — live weight (settling): {"weight":19.65,"state":"settling"}
+  reading 19.65 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 17 00 07 00 a2 01 00 00 62 d4 00 19
+  Dr Trust — live weight (settling): {"weight":25.3,"state":"settling"}
+  reading 25.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 18 00 07 00 a2 01 00 00 5f e6 00 08
+  Dr Trust — live weight (settling): {"weight":24.55,"state":"settling"}
+  reading 24.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 19 00 07 00 a2 01 00 00 52 3a 00 0f
+  Dr Trust — live weight (settling): {"weight":21.05,"state":"settling"}
+  reading 21.05 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1a 00 07 00 a2 01 00 00 42 cc 00 11
+  Dr Trust — live weight (settling): {"weight":17.1,"state":"settling"}
+  reading 17.1 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1b 00 07 00 a2 01 00 00 2a 30 00 1d
+  Dr Trust — live weight (settling): {"weight":10.8,"state":"settling"}
+  reading 10.8 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1c 00 07 00 a2 01 00 00 24 22 00 09
+  Dr Trust — live weight (settling): {"weight":9.25,"state":"settling"}
+  reading 9.25 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1d 00 07 00 a2 01 00 00 2a 62 00 0f
+  Dr Trust — live weight (settling): {"weight":10.85,"state":"settling"}
+  reading 10.85 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1e 00 07 00 a2 01 00 00 38 d6 00 11
+  Dr Trust — live weight (settling): {"weight":14.55,"state":"settling"}
+  reading 14.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 1f 00 07 00 a2 01 00 00 50 46 00 19
+  Dr Trust — live weight (settling): {"weight":20.55,"state":"settling"}
+  reading 20.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 20 00 07 00 a2 01 00 00 62 0c 00 11
+  Dr Trust — live weight (settling): {"weight":25.1,"state":"settling"}
+  reading 25.1 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 21 00 07 00 a2 01 00 00 98 8a 00 05
+  Dr Trust — live weight (settling): {"weight":39.05,"state":"settling"}
+  reading 39.05 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 22 00 07 00 a2 01 00 00 c8 c8 00 13
+  Dr Trust — live weight (settling): {"weight":51.4,"state":"settling"}
+  reading 51.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 23 00 07 00 a2 01 00 00 fe 4c 00 0d
+  Dr Trust — live weight (settling): {"weight":65.1,"state":"settling"}
+  reading 65.1 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 24 00 07 00 a2 01 00 01 4b 40 00 0f
+  Dr Trust — live weight (settling): {"weight":84.8,"state":"settling"}
+  reading 84.8 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 25 00 07 00 a2 01 00 01 67 60 00 0b
+  Dr Trust — live weight (settling): {"weight":92,"state":"settling"}
+  reading 92 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 26 00 07 00 a2 01 00 01 7b 7e 00 1d
+  Dr Trust — live weight (settling): {"weight":97.15,"state":"settling"}
+  reading 97.15 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 27 00 07 00 a2 01 00 01 6f f8 00 0b
+  Dr Trust — live weight (settling): {"weight":94.2,"state":"settling"}
+  reading 94.2 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 28 00 07 00 a2 01 00 01 76 38 00 12
+  Dr Trust — live weight (settling): {"weight":95.8,"state":"settling"}
+  reading 95.8 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 29 00 07 00 a2 01 00 01 7b 1a 00 19
+  Dr Trust — live weight (settling): {"weight":97.05,"state":"settling"}
+  reading 97.05 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2a 00 07 00 a2 01 00 01 78 5e 00 1a
+  Dr Trust — live weight (settling): {"weight":96.35,"state":"settling"}
+  reading 96.35 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2b 00 07 00 a2 01 00 01 78 5e 00 1a
+  Dr Trust — live weight (settling): {"weight":96.35,"state":"settling"}
+  reading 96.35 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2c 00 07 00 a2 01 00 01 78 5e 00 1a
+  Dr Trust — live weight (settling): {"weight":96.35,"state":"settling"}
+  reading 96.35 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2d 00 07 00 a2 01 00 01 77 00 00 1b
+  Dr Trust — live weight (settling): {"weight":96,"state":"settling"}
+  reading 96 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2e 00 07 00 a2 01 00 01 77 00 00 1b
+  Dr Trust — live weight (settling): {"weight":96,"state":"settling"}
+  reading 96 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 2f 00 07 00 a2 01 00 01 78 2c 00 08
+  Dr Trust — live weight (settling): {"weight":96.3,"state":"settling"}
+  reading 96.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 30 00 07 00 a2 01 00 01 78 2c 00 08
+  Dr Trust — live weight (settling): {"weight":96.3,"state":"settling"}
+  reading 96.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 31 00 07 00 a2 01 00 01 79 8a 00 07
+  Dr Trust — live weight (settling): {"weight":96.65,"state":"settling"}
+  reading 96.65 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 32 00 07 00 a2 01 00 01 79 58 00 15
+  Dr Trust — live weight (settling): {"weight":96.6,"state":"settling"}
+  reading 96.6 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 33 00 07 00 a2 01 00 01 79 58 00 15
+  Dr Trust — live weight (settling): {"weight":96.6,"state":"settling"}
+  reading 96.6 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 34 00 07 00 a2 01 00 01 79 26 00 03
+  Dr Trust — live weight (settling): {"weight":96.55,"state":"settling"}
+  reading 96.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 35 00 07 00 a2 01 00 01 79 26 00 03
+  Dr Trust — live weight (settling): {"weight":96.55,"state":"settling"}
+  reading 96.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 36 00 07 00 a2 01 00 01 79 26 00 03
+  Dr Trust — live weight (settling): {"weight":96.55,"state":"settling"}
+  reading 96.55 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 37 00 07 00 a2 01 00 01 78 c2 00 1e
+  Dr Trust — live weight (settling): {"weight":96.45,"state":"settling"}
+  reading 96.45 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 38 00 07 00 a2 01 00 01 77 c8 00 03
+  Dr Trust — live weight (settling): {"weight":96.2,"state":"settling"}
+  reading 96.2 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 39 00 07 00 a2 01 00 01 77 c8 00 03
+  Dr Trust — live weight (settling): {"weight":96.2,"state":"settling"}
+  reading 96.2 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3a 00 07 00 a2 01 00 01 77 fa 00 15
+  Dr Trust — live weight (settling): {"weight":96.25,"state":"settling"}
+  reading 96.25 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3b 00 07 00 a2 01 00 01 77 fa 00 15
+  Dr Trust — live weight (settling): {"weight":96.25,"state":"settling"}
+  reading 96.25 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3c 00 07 00 a2 01 00 01 78 2c 00 08
+  Dr Trust — live weight (settling): {"weight":96.3,"state":"settling"}
+  reading 96.3 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3d 00 07 00 a2 01 00 01 78 5e 00 1a
+  Dr Trust — live weight (settling): {"weight":96.35,"state":"settling"}
+  reading 96.35 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3e 00 07 00 a2 01 00 01 78 5e 00 1a
+  Dr Trust — live weight (settling): {"weight":96.35,"state":"settling"}
+  reading 96.35 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 3f 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 40 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 41 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 42 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 43 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 44 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 45 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 46 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 47 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 48 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 49 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4a 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4b 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4c 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4d 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4e 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 4f 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 50 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 51 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 52 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 53 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 54 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 55 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 56 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 57 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 58 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 59 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 5a 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 5b 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 5c 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb2-0000-1000-8000-00805f9b34fb 5d 00 07 00 a2 01 00 01 78 90 00 0c
+  Dr Trust — live weight (settling): {"weight":96.4,"state":"settling"}
+  reading 96.4 kg (settling)
+  frame 0000ffb3-0000-1000-8000-00805f9b34fb 8e 00 23 00 a7 6a 9b ff f7 25 01 78 90 00 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1a
+    Dr Trust: record frames aligned at marker offset 2.
+  Dr Trust measurement record: {"weight":96.4,"impedanceOhm":6552.7}
+  reading 96.4 kg, 6552.7 ohm (settling)
+captured (weight and impedance)
+{
+  "ok": true,
+  "source": "scale",
+  "timestamp": "2026-09-05T11:41:44.224Z",
+  "device": {
+    "name": "SSW533",
+    "address": "19F45C09-9547-4B31-09C4-0A1EB022AFA5"
+  },
+  "model": "Dr Trust SSW532",
+  "measured": {
+    "weightKg": 96.4,
+    "impedanceOhm": 6552.7
+  },
+  "derived": {
+    "bmi": 29.8,
+    "bmiCategoryWho": "overweight",
+    "bmiCategoryAsiaPacific": "obese class I",
+    "bodyFatPercentBmiAnchor": 28.5,
+    "bmrKcal": 1899,
+    "healthyWeightRangeKg": "59.9 – 81",
+    "weightAboveHealthyRangeKg": 15.4,
+    "idealWeightRangeKg": "71.5 – 77.3",
+    "bodyWaterLitres": 20.39,
+    "bodyWaterPercent": 21.2,
+    "fatFreeMassKg": 27.85,
+    "fatFreeMassIndex": 8.6,
+    "bodyFatPercent": 71.1,
+    "fatMassKg": 68.55,
+    "muscleMassKg": 26.71,
+    "muscleMassPercent": 27.7,
+    "skeletalMuscleMassKg": 8.14,
+    "skeletalMusclePercent": 8.4,
+    "skeletalMuscleIndex": 2.5,
+    "boneMassKg": 1.15,
+    "proteinMassKg": 6.32,
+    "proteinPercent": 6.6,
+    "bodyFatGapPoints": 42.6,
+    "bodyFatRecommendedKey": "bodyFatPercentBmiAnchor"
+  },
+  "units": {
+    "bmi": "kg/m²",
+    "bmiCategoryWho": "",
+    "bmiCategoryAsiaPacific": "",
+    "bodyFatPercentBmiAnchor": "%",
+    "bmrKcal": "kcal/day",
+    "healthyWeightRangeKg": "kg",
+    "weightAboveHealthyRangeKg": "kg",
+    "idealWeightRangeKg": "kg",
+    "bodyWaterLitres": "L",
+    "bodyWaterPercent": "%",
+    "fatFreeMassKg": "kg",
+    "fatFreeMassIndex": "kg/m²",
+    "bodyFatPercent": "%",
+    "fatMassKg": "kg",
+    "muscleMassKg": "kg",
+    "muscleMassPercent": "%",
+    "skeletalMuscleMassKg": "kg",
+    "skeletalMusclePercent": "%",
+    "skeletalMuscleIndex": "kg/m²",
+    "boneMassKg": "kg",
+    "proteinMassKg": "kg",
+    "proteinPercent": "%",
+    "bodyFatGapPoints": "points",
+    "bodyFatRecommendedKey": ""
+  },
+  "confidence": {
+    "bmi": "derived-literature",
+    "bmiCategoryWho": "derived-literature",
+    "bmiCategoryAsiaPacific": "derived-literature",
+    "bodyFatPercentBmiAnchor": "derived-literature",
+    "bmrKcal": "derived-literature",
+    "healthyWeightRangeKg": "derived-literature",
+    "weightAboveHealthyRangeKg": "derived-literature",
+    "idealWeightRangeKg": "derived-literature",
+    "bodyWaterLitres": "derived-literature",
+    "bodyWaterPercent": "derived-literature",
+    "fatFreeMassKg": "derived-literature",
+    "fatFreeMassIndex": "derived-literature",
+    "bodyFatPercent": "derived-literature",
+    "fatMassKg": "derived-literature",
+    "muscleMassKg": "derived-vendor-convention",
+    "muscleMassPercent": "derived-vendor-convention",
+    "skeletalMuscleMassKg": "derived-literature",
+    "skeletalMusclePercent": "derived-literature",
+    "skeletalMuscleIndex": "derived-literature",
+    "boneMassKg": "derived-vendor-convention",
+    "proteinMassKg": "derived-vendor-convention",
+    "proteinPercent": "derived-vendor-convention",
+    "bodyFatGapPoints": "derived-literature",
+    "bodyFatRecommendedKey": ""
+  },
+  "trust": {
+    "impedanceFree": true,
+    "impedanceDerived": false
+  },
+  "bodyFatRecommended": {
+    "key": "bodyFatPercentBmiAnchor",
+    "value": 28.5
+  },
+  "crossCheck": {
+    "impedanceBased": 71.1,
+    "bmiBased": 28.5,
+    "gapPoints": 42.6,
+    "oneSigma": 6.8,
+    "twoSigma": 13.5
+  },
+  "vendorMatch": null,
+  "flags": [
+    {
+      "rule": "T2",
+      "severity": "fatal",
+      "message": "Impedance of 6552.7 Ω is outside the physically possible 150 to 1200 Ω band."
+    },
+    {
+      "rule": "T3",
+      "severity": "fatal",
+      "message": "Impedance gives 71.1% body fat while the BMI method gives 28.5%. A 42.6 point gap is beyond two standard errors, so the impedance figure is not usable."
+    },
+    {
+      "rule": "T5",
+      "severity": "fatal",
+      "message": "Body fat of 71.1% is outside the survivable 4 to 60 for an adult male."
+    },
+    {
+      "rule": "T7",
+      "severity": "warn",
+      "message": "The lean-mass metabolic rate differs from Mifflin-St Jeor by more than 15%. This restates the lean mass error in calories; it is corroboration, not a second opinion."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Body fat, from impedance of 71.1 is outside the plausible 5 to 50 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Body water of 21.2 is outside the plausible 45 to 65 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Fat-free mass index of 8.6 is outside the plausible 16 to 25 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Muscle mass of 27.7 is outside the plausible 60 to 90 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Skeletal muscle of 8.14 is outside the plausible 20 to 45 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Skeletal muscle of 8.4 is outside the plausible 30 to 48 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Skeletal muscle index of 2.5 is outside the plausible 8.5 to 13 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Bone mass of 1.15 is outside the plausible 2.3 to 4.5 for an adult male."
+    },
+    {
+      "rule": "T10",
+      "severity": "warn",
+      "message": "Protein of 6.6 is outside the plausible 14 to 22 for an adult male."
+    }
+  ],
+  "warnings": [
+    "Impedance of 6552.7 Ω is outside the physically possible 150 to 1200 Ω band.",
+    "Impedance gives 71.1% body fat while the BMI method gives 28.5%. A 42.6 point gap is beyond two standard errors, so the impedance figure is not usable.",
+    "Body fat of 71.1% is outside the survivable 4 to 60 for an adult male.",
+    "The impedance-derived half of this panel is not trustworthy in absolute terms. A gap this wide means the reading is foot-to-foot, while these equations were fitted on hand-to-foot resistance that runs 100 to 200 Ω higher. The direction and size of change over time, measured the same way each morning, is the part worth trusting.",
+    "The scale sent two numbers, your weight and one impedance value. Everything else was estimated from them."
+  ],
+  "omitted": {
+    "visceralFatRating": "No peer-reviewed formula exists, and vendor implementations differ by about a factor of two. A foot-to-foot current path runs leg to pelvis to leg and largely bypasses the abdominal viscera, so every vendor visceral fat number is a function of weight, height, age and sex only. It contains no impedance information.",
+    "metabolicAgeYears": "Both published conventions failed checking. The body-fat-band method is unreproducible from its source, and the BMI-regression method saturates its own clamps across the whole realistic input range, so it returns a constant while looking like a measurement.",
+    "bodyScore": "Composite index with no stable definition and a disputed transcription.",
+    "subcutaneousFatPercent": "The convention circulating in scale SDKs has no source, and its own published worked examples are arithmetically inconsistent.",
+    "bodyWaterPercentOfFfm": "Identically 73.2 by construction, because fat-free mass is derived from body water. It is a constant wearing a measurement’s clothes.",
+    "fatFreeMassKyle2001": "The lowest-error adult equation available, but it requires reactance, which this scale does not transmit. Never implement it with a synthesised reactance."
+  },
+  "profile": {
+    "sex": "male",
+    "age": 39,
+    "heightCm": 180
+  },
+  "measurementNumber": 1
+}
+
+  96.4 kg   6552.7 ohm
+  28.5 % body fat (from BMI; impedance failed its checks)
+  impedance values NOT trustworthy: T2, T3, T5
+

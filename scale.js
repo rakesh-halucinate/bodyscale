@@ -345,7 +345,8 @@ function measureOnce(opts) {
     };
     if (opts.registerChild) opts.registerChild(py);
 
-    const capture = { weight: null, impedance: null, finalSeen: false, frames: 0, settled: false };
+    const capture = { weight: null, impedance: null, impedancePlausible: false,
+                      waitedForProgram: false, finalSeen: false, frames: 0, settled: false };
     let device = null, identified = null, driver = null, ctx = null, grace = null, finished = false;
     let spawnError = null;                     // set when the interpreter itself will not start
 
@@ -371,7 +372,37 @@ function measureOnce(opts) {
       if (!values || capture.settled) return;
       capture.frames++;
       if (values.weight > 0) capture.weight = values.weight;
-      if (values.impedanceOhm > 0) capture.impedance = values.impedanceOhm;
+      /*
+       * The scale sends a record frame the moment weight settles, and again
+       * after its own impedance program has run — the one the display calls
+       * P1, which holds for about ten seconds. The first frame carries a
+       * placeholder rather than a measurement.
+       *
+       * Observed on real hardware. A completed program gives bytes [5][6] of
+       * zero and a resistance inside the physical band: 00 00 14 b3, 529.9 Ω.
+       * A frame sent before it finishes gives non-zero there and a value far
+       * outside it: 6a 9b ff f7, which decodes to 6552.7 Ω. 0xfff7 is eight
+       * below 0xffff and is a not-measured sentinel, not a resistance.
+       *
+       * Taking the first frame and disconnecting is what produced every
+       * implausible impedance in this project. So a value outside the band is
+       * recorded but does NOT finish the measurement: the link stays open for
+       * the real one, and the hold timeout still bounds the wait.
+       */
+      const PLAUSIBLE_MIN = 150;
+      const PLAUSIBLE_MAX = 1200;
+      if (values.impedanceOhm > 0) {
+        const z = values.impedanceOhm;
+        capture.impedance = z;
+        capture.impedancePlausible = z >= PLAUSIBLE_MIN && z <= PLAUSIBLE_MAX;
+        if (!capture.impedancePlausible && !capture.waitedForProgram) {
+          capture.waitedForProgram = true;
+          note(`  impedance ${z} Ω is outside the physical band; the scale's own program`);
+          note('  has not finished. Stand still — waiting for the real reading.');
+          emit({ _hint: true, code: 'HOLD_STILL', count: 1, afterMs: 0,
+                 message: 'Stand still. The scale is still measuring.' });
+        }
+      }
       if (values.state === 'final') capture.finalSeen = true;
       if (capture.weight > 0) {
         note(`  reading ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} ohm` : ''}`
@@ -380,7 +411,11 @@ function measureOnce(opts) {
         emit({ phase: capture.finalSeen ? 'settled' : 'settling', weightKg: capture.weight,
                impedanceOhm: capture.impedance, message: `${capture.weight} kg` });
       }
-      if (capture.weight > 0 && capture.impedance > 0) return complete('weight and impedance');
+      // Only a plausible impedance ends the measurement. An implausible one is
+      // the placeholder the scale sends before its program has run.
+      if (capture.weight > 0 && capture.impedance > 0 && capture.impedancePlausible) {
+        return complete('weight and impedance');
+      }
       if (capture.finalSeen && capture.weight > 0 && !grace) {
         grace = setTimeout(() => complete('weight settled, no impedance arrived'), 5000);
       }
@@ -527,6 +562,9 @@ function measureOnce(opts) {
       if ((signal === 'SIGABRT' || code === 134) && capture.frames === 0) {
         return finish('tcc-denied', 'tcc-denied');
       }
+      // Timed out or the link dropped. Report what there is, including an
+      // implausible impedance: the trust rules describe it honestly, and a
+      // weight-only result is still useful.
       finish('exited', capture.weight > 0 ? 'ok' : 'no-reading');
     });
   });

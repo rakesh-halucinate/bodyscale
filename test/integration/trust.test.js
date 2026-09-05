@@ -720,17 +720,46 @@ test('INT-TRUST-27  vendorMatch reproduces the scale app, from a real reading', 
   // The three that differ by convention, reported the scale's way.
   const vm = r.vendorMatch;
   assert.ok(vm, 'vendorMatch is present when the impedance is usable');
+  // The three conventions that held across BOTH observed sessions.
   close(vm.bmrKcal, 1634, 3, 'vendor BMR (Katch-McArdle)');
-  close(vm.skeletalMuscleMassKg, 35.20, 0.2, 'vendor skeletal muscle');
   close(vm.boneMassKg, 3.90, 0.05, 'vendor bone mass');
   close(vm.muscleMassKg, 54.66, 0.2, 'vendor muscle mass');
 
-  // And ours are still the published ones, not quietly replaced.
+  // And ours is still the published one, not quietly replaced.
   assert.notStrictEqual(r.values.bmrKcal, vm.bmrKcal, 'our BMR is still Mifflin-St Jeor');
-  assert.notStrictEqual(r.values.skeletalMuscleMassKg, vm.skeletalMuscleMassKg,
-    'our skeletal muscle is still Janssen 2000');
-  for (const k of ['bmrBasis', 'skeletalMuscleBasis', 'boneBasis', 'muscleBasis']) {
+  for (const k of ['bmrBasis', 'boneBasis', 'muscleBasis']) {
     assert.ok(typeof vm[k] === 'string' && vm[k].length > 5, `${k} says which convention it is`);
+  }
+
+  // Two fits from one reading were disproven by a second. They must be named as
+  // unresolved rather than shipped as a number that looks authoritative.
+  assert.ok(vm.unresolved, 'what two readings could not settle is stated');
+  assert.ok(!('proteinMassKg' in vm), 'the disproven protein fit was withdrawn');
+  assert.ok(!('skeletalMuscleMassKg' in vm), 'and the disproven skeletal muscle fit');
+  for (const k of ['proteinMassKg', 'skeletalMuscleMassKg']) {
+    assert.ok(vm.unresolved[k], `${k} is listed as unresolved`);
+  }
+});
+
+// Prevents: shipping a fit that a second observation already contradicts. Two
+// real sessions eighteen minutes apart give protein/fat-free of 0.21153 then
+// 0.20780, and skeletal-muscle/fat-free of 0.6005 then 0.5873 — both moved far
+// beyond rounding, so neither is a fixed fraction of anything.
+test('INT-TRUST-29  the two disproven vendor fits stay withdrawn', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+  const a = BIA.estimate({ weightKg: 94.25, impedanceOhm: 582, heightCm: 180.34, age: 39, sex: 'male' });
+  const b = BIA.estimate({ weightKg: 96.40, impedanceOhm: 595, heightCm: 180.34, age: 39, sex: 'male' });
+
+  // The conventions that DID hold, checked on both.
+  for (const [r, bone, muscle, bmr] of [[a, 3.90, 54.66, 1634], [b, 3.90, 54.27, 1627]]) {
+    assert.ok(Math.abs(r.vendorMatch.boneMassKg - bone) <= 0.05);
+    assert.ok(Math.abs(r.vendorMatch.muscleMassKg - muscle) <= 0.25);
+    assert.ok(Math.abs(r.vendorMatch.bmrKcal - bmr) <= 4);
+  }
+  // And the ones that did not are absent from both.
+  for (const r of [a, b]) {
+    assert.ok(!('proteinMassKg' in r.vendorMatch));
+    assert.ok(!('skeletalMuscleMassKg' in r.vendorMatch));
   }
 });
 
