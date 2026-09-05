@@ -1,0 +1,9 @@
+profile: male, 39y, 180cm   saved address BEECC6EC-BD30-3EAC-B148-4833628A8A58
+(identifier is a CoreBluetooth UUID, specific to this Mac)
+transport ok: python 3.11.15, bleak 3.0.2
+  platform Darwin 24.0.0, python 3.11.15
+  scanning for SSW533 / BEECC6EC-BD30-3EAC-B148-4833628A8A58
+  >> Step on the scale to wake it, then wait a moment.
+  >> Step on the scale to wake it, then wait a moment.
+{"ok":false,"error":"not-found","reason":"no device named \"SSW533\" answered. Its radio sleeps when idle, so step on the scale to wake it.","timestamp":"2026-09-05T13:19:25.800Z"}
+no device named "SSW533" answered. Its radio sleeps when idle, so step on the scale to wake it.

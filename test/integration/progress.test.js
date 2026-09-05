@@ -492,3 +492,46 @@ test('INT-PROG-23  a locked weight is frozen and later drift is ignored', async 
     'and every one of them is the locked value, never the drift');
   assert.match(stderr, /ignoring 94\.2 kg/, 'the ignored drift is reported, not silently dropped');
 });
+
+// Prevents: hanging up before the scale has measured. Its impedance program
+// runs AFTER the weight locks — the display shows P-1 and holds about ten
+// seconds — and the client used to give up five seconds in. From the user's
+// side that looks like "the Bluetooth disconnects as soon as it has the
+// weight", and it guaranteed a weight-only reading no decode fix could rescue.
+test('INT-PROG-24  the link is held open while the scale measures impedance', async () => {
+  const IMPEDANCE = '31 00 23 01 a7 00 00 e5 06 e7 06 e7 06'
+    + ' 00'.repeat(27) + ' 02';
+  const f = H.fixture('late-impedance', [
+    { t: 'log', level: 'info', msg: 'scanning for SSW533' },
+    { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
+    { t: 'services', items: [{ service: '0000ffb0-0000-1000-8000-00805f9b34fb',
+      char: FFB3, props: ['indicate'] }] },
+    { t: 'ready' },
+    { t: 'frame', uuid: FFB2, hex: '01 00 07 00 a2 01 00 01 78 90 00 0c' },  // settling
+    { t: 'frame', uuid: FFB2, hex: '02 00 07 00 a2 00 00 01 78 90 00 0c' },  // LOCKED
+    // Seven seconds of silence, which is where the old five-second grace fired.
+    ...Array(7).fill({ t: 'log', level: 'info', msg: 'measuring' }),
+    { t: 'frame', uuid: FFB3, hex: IMPEDANCE },
+  ]);
+
+  const { events } = await H.serve({
+    replay: f,
+    timeoutMs: 30000,
+    env: { REPLAY_DELAY_MS: '1000' },
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'W', cmd: 'measure', profile: H.PROFILE }); return false; }
+      return (ev.type === 'measurement' || ev.type === 'error') && ev.id === 'W';
+    },
+  });
+
+  const m = events.find((e) => e.type === 'measurement');
+  assert.ok(m, `expected a measurement, saw [${events.map((e) => e.type).join(', ')}]`);
+  assert.strictEqual(m.measured.impedanceOhm, 529.9,
+    'the impedance arrived seven seconds after the lock and was still collected');
+  assert.strictEqual(Object.keys(m.derived).length, 24);
+  assert.strictEqual(m.trust.impedanceDerived, true);
+
+  const hint = H.byType(events, 'hint').find((h) => h.code === 'STAY_ON_SCALE');
+  assert.ok(hint, 'and the user is told to stay onrather than left watching nothing');
+  assert.match(hint.message, /stay on the scale/i);
+});

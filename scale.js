@@ -181,6 +181,7 @@ function parseArgs(argv) {
     else if (k === '--serve') a.serve = true;
     else if (k === '--python') a.python = next();
     else if (k === '--hint-after') a.hintAfterSec = Number(next());
+    else if (k === '--impedance-wait') a.impedanceWaitSec = Number(next());
     else if (k === '-h' || k === '--help') a.help = true;
     else { console.error(`unknown option: ${k}`); a.help = true; a.badOption = true; }
   }
@@ -221,6 +222,8 @@ Loop mode:
   --python <path>        interpreter for the Bluetooth helper
                          (or set BODYSCALE_PYTHON)
   --hint-after <s>       nudge the user after this long with nothing, default 8
+  --impedance-wait <s>   stay connected this long after the weight locks, while
+                         the scale runs its own impedance program, default 30
 
 The profile is remembered in .scale-config.json after the first run.`;
 
@@ -437,7 +440,27 @@ function measureOnce(opts) {
         return complete('weight and impedance');
       }
       if (capture.finalSeen && capture.weight > 0 && !grace) {
-        grace = setTimeout(() => complete('weight settled, no impedance arrived'), 5000);
+        /*
+         * Stay connected while the scale measures impedance.
+         *
+         * Five seconds was far too short. The scale starts its own program
+         * AFTER the weight locks — the display shows P-1 and holds about ten
+         * seconds — so hanging up five seconds in guarantees a weight-only
+         * reading and looks, from the user's side, like "the Bluetooth
+         * disconnects as soon as it has the weight". Which is exactly what it
+         * was doing.
+         *
+         * The vendor app simply stays connected. So does this now, and it says
+         * why, because standing still on a scale with nothing on screen is
+         * indistinguishable from a hang.
+         */
+        const waitMs = Math.max(1000, Number(opts.impedanceWaitSec || 30) * 1000);
+        note(`  weight locked. Staying connected for up to ${Math.round(waitMs / 1000)} s`);
+        note('  while the scale measures impedance. Stay on it and hold the handle.');
+        emit({ _hint: true, code: 'STAY_ON_SCALE', count: 1, afterMs: 0,
+               message: 'Weight recorded. Stay on the scale and hold the handle '
+                      + 'while it measures body composition.' });
+        grace = setTimeout(() => complete('weight settled, no impedance arrived'), waitMs);
       }
     };
 
@@ -825,6 +848,7 @@ async function serve(a) {
       // Per-request first, then the process default, exactly as scanTimeout
       // does below. Without the fallback --hint-after was parsed and discarded.
       hintAfterSec: Number(req.hintAfterSec) || a.hintAfterSec,
+      impedanceWaitSec: Number(req.impedanceWaitSec) || a.impedanceWaitSec,
       name: req.deviceName || cfg.name || a.name,
       address: req.address || cfg[ADDRESS_KEY],
       profile: profile || { sex: 'male', age: 30, heightCm: 170 },
@@ -1019,6 +1043,7 @@ async function main() {
     name: a.name, address: a.address || cfg[ADDRESS_KEY], profile, raw: a.raw, replay: a.replay,
     scanTimeout: a.scanTimeout, connectTimeout: a.connectTimeout, hold: a.hold, python: a.python,
     hintAfterSec: a.hintAfterSec,
+    impedanceWaitSec: a.impedanceWaitSec,
     onEvent: (e) => { if (e._hint) note(`  >> ${e.message}`); },
   };
   if (opts.replay) note(`replaying ${opts.replay} (no Bluetooth involved)`);

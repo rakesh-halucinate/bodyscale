@@ -214,6 +214,9 @@ async function main() {
         scanTimeoutSec: Number(arg('--scan-timeout', 90)),
         timeoutSec: Number(arg('--hold', 180)),
         hintAfterSec: Number(arg('--hint-after', 8)),
+        // The scale runs its impedance program after the weight locks. Hanging
+        // up before it finishes is what produced weight-only readings.
+        impedanceWaitSec: Number(arg('--impedance-wait', 30)),
       });
     } catch (err) {
       clearLive();
