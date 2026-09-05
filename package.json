@@ -12,7 +12,9 @@
     "test:integration": "node test/run-plan.js --integration",
     "test:json": "node test/run-plan.js --json",
     "test:raw": "node --test test/*.test.js test/integration/*.test.js",
-    "verify": "./verify.sh"
+    "verify": "./verify.sh",
+    "simulate": "node simulate.js",
+    "simulate:replay": "node simulate.js --replay"
   },
   "allowScripts": {
     "@abandonware/noble@1.9.2-26": true

@@ -122,6 +122,9 @@ function fixtureWithoutImpedance(tag) {
  */
 function serve(opts) {
   const { replay = FIXTURE, env = {}, args = [], timeoutMs = 25000, onEvent } = opts;
+  // REPLAY_HOLD_MS in `env` makes the stand-in transport stay connected and
+  // silent after the recording ends, which is how a real scale behaves when it
+  // is sitting on a stale reading.
   return new Promise((resolve, reject) => {
     const argv = [SCALE, '--serve'];
     if (replay) argv.push('--replay', replay);

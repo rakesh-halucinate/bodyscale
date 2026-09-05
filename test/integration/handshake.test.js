@@ -23,7 +23,7 @@ const ADDRESS_KEY = `address_${process.platform}`;
 
 /** The exact field set of `hello`, which the host parses. */
 const HELLO_KEYS = ['proto', 'type', 'app', 'version', 'platform', 'node',
-  'device', 'commands', 'errorCodes', 'profile', 'note'];
+  'device', 'commands', 'errorCodes', 'events', 'hints', 'profile', 'note'];
 
 const POSIX_ONLY = process.platform === 'win32' ? 'ps(1) is POSIX-only' : false;
 

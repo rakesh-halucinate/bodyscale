@@ -180,6 +180,7 @@ function parseArgs(argv) {
     else if (k === '--max-attempts') a.maxAttempts = Number(next());
     else if (k === '--serve') a.serve = true;
     else if (k === '--python') a.python = next();
+    else if (k === '--hint-after') a.hintAfterSec = Number(next());
     else if (k === '-h' || k === '--help') a.help = true;
     else { console.error(`unknown option: ${k}`); a.help = true; a.badOption = true; }
   }
@@ -198,6 +199,10 @@ const HELP = `read a Bluetooth LE body scale and print JSON
 Service mode, for an Electron or other host application:
   node scale.js --serve             newline-delimited JSON on stdin and stdout
 
+Rehearse the Electron flow in a terminal:
+  node simulate.js                  capture, hold the reading, then enter details
+  node simulate.js --replay         the same, with no hardware
+
 Loop mode:
   node scale.js --watch             measure over and over until Ctrl+C
   --interval <s>    pause between attempts, default 3
@@ -215,6 +220,7 @@ Loop mode:
   --hold <s>             give up waiting for a reading, default 120
   --python <path>        interpreter for the Bluetooth helper
                          (or set BODYSCALE_PYTHON)
+  --hint-after <s>       nudge the user after this long with nothing, default 8
 
 The profile is remembered in .scale-config.json after the first run.`;
 
@@ -300,6 +306,33 @@ function measureOnce(opts) {
     const rl = readline.createInterface({ input: py.stdout });
 
     const emit = opts.onEvent || (() => {});
+
+    /*
+     * Nudges.
+     *
+     * Two stalls are the user's to fix, not the software's. A scan that finds
+     * nothing means the scale's radio is asleep and needs standing on. A link
+     * that is up but silent means the scale is holding an old reading and needs
+     * a step off and back on. Both look identical to a spinner, so the service
+     * says which it is, and the host can put a sentence on screen instead of
+     * leaving someone watching nothing happen.
+     *
+     * Advisory only: a nudge never ends a measurement and never changes its
+     * outcome. Hosts that ignore the event are unaffected.
+     */
+    const hintAfterMs = Math.max(1000, Number(opts.hintAfterSec || 8) * 1000);
+    let hintTimer = null;
+    let hintCount = 0;
+    const stopHints = () => { if (hintTimer) { clearInterval(hintTimer); hintTimer = null; } };
+    const armHint = (code, message) => {
+      stopHints();
+      hintCount = 0;
+      hintTimer = setInterval(() => {
+        hintCount++;
+        emit({ _hint: true, code, message, count: hintCount, afterMs: hintAfterMs * hintCount });
+      }, hintAfterMs);
+      if (hintTimer.unref) hintTimer.unref();
+    };
     if (opts.registerChild) opts.registerChild(py);
 
     const capture = { weight: null, impedance: null, finalSeen: false, frames: 0, settled: false };
@@ -309,6 +342,7 @@ function measureOnce(opts) {
     const finish = (reason, outcome) => {
       if (finished) return;
       finished = true;
+      stopHints();
       if (grace) clearTimeout(grace);
       try { py.stdin.end(); } catch (e) { /* already closed */ }
       setTimeout(() => killChild(py), 400);
@@ -332,6 +366,7 @@ function measureOnce(opts) {
       if (capture.weight > 0) {
         note(`  reading ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} ohm` : ''}`
              + `${capture.finalSeen ? ' (settled)' : ' (settling)'}`);
+        stopHints();
         emit({ phase: capture.finalSeen ? 'settled' : 'settling', weightKg: capture.weight,
                impedanceOhm: capture.impedance, message: `${capture.weight} kg` });
       }
@@ -363,8 +398,13 @@ function measureOnce(opts) {
       try { ev = JSON.parse(line); } catch (e) { return; }
       if (ev.t === 'log') {
         note(`  ${ev.msg}`);
-        if (/scanning/i.test(ev.msg)) emit({ phase: 'scanning', message: ev.msg });
-        else if (/advertisement/i.test(ev.msg)) emit({ phase: 'found', message: ev.msg });
+        if (/scanning/i.test(ev.msg)) {
+          emit({ phase: 'scanning', message: ev.msg });
+          armHint('WAKE_THE_SCALE', 'Step on the scale to wake it, then wait a moment.');
+        } else if (/advertisement/i.test(ev.msg)) {
+          emit({ phase: 'found', message: ev.msg });
+          stopHints();                       // it answered; nothing to nudge about
+        }
         return;
       }
       if (ev.t === 'device') {
@@ -386,7 +426,14 @@ function measureOnce(opts) {
         else note(`${uuids.length} characteristic(s)`);
         return;
       }
-      if (ev.t === 'ready') { note('ready — stand on the scale'); emit({ phase: 'ready', message: 'stand on the scale' }); return; }
+      if (ev.t === 'ready') {
+        note('ready — stand on the scale');
+        emit({ phase: 'ready', message: 'stand on the scale' });
+        // Connected and listening, but the scale may be sitting on a stale
+        // reading it will not resend until it is disturbed.
+        armHint('STEP_OFF_AND_ON', 'Step off the scale and step back on.');
+        return;
+      }
       if (ev.t === 'frame') {
         // hexToBytes throws on odd-length input. A malformed frame must not be
         // able to take down a service whose contract is that errors never do.
@@ -607,6 +654,14 @@ async function serve(a) {
     device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY], remembered: true } : null,
     commands: ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown'],
     errorCodes: Object.keys(ERRORS),
+    events: ['hello', 'accepted', 'progress', 'hint', 'measurement',
+             'status', 'cancelling', 'forgotten', 'bye', 'error'],
+    hints: {
+      codes: ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON'],
+      defaultAfterSec: 8,
+      note: 'Advisory only. A hint never ends a measurement; it names the one thing '
+          + 'the person can do to unstick it, and repeats until they do.',
+    },
     profile: {
       required: true,
       suppliedBy: 'host',
@@ -653,6 +708,7 @@ async function serve(a) {
       heightCm: Number(req.profile.heightCm),
     };
     const opts = {
+      hintAfterSec: Number(req.hintAfterSec) || undefined,
       name: req.deviceName || cfg.name || a.name,
       address: req.address || cfg[ADDRESS_KEY],
       profile: profile || { sex: 'male', age: 30, heightCm: 170 },
@@ -660,7 +716,16 @@ async function serve(a) {
       scanTimeout: Number(req.scanTimeoutSec) || a.scanTimeout,
       connectTimeout: a.connectTimeout,
       hold: Number(req.timeoutSec) || a.hold,
-      onEvent: (e) => out(Object.assign({ proto: PROTOCOL_VERSION, type: 'progress', id: req.id }, e)),
+      onEvent: (e) => {
+        // A nudge is advice for the person, not a step in the measurement, so
+        // it gets its own type rather than a seventh progress phase. Hosts that
+        // ignore unknown types are unaffected.
+        if (e._hint) {
+          const { _hint, ...hint } = e;
+          return out(Object.assign({ proto: PROTOCOL_VERSION, type: 'hint', id: req.id }, hint));
+        }
+        return out(Object.assign({ proto: PROTOCOL_VERSION, type: 'progress', id: req.id }, e));
+      },
       registerChild: (child) => { if (running) running.child = child; },
     };
 
@@ -837,6 +902,8 @@ async function main() {
   const opts = {
     name: a.name, address: a.address || cfg[ADDRESS_KEY], profile, raw: a.raw, replay: a.replay,
     scanTimeout: a.scanTimeout, connectTimeout: a.connectTimeout, hold: a.hold, python: a.python,
+    hintAfterSec: a.hintAfterSec,
+    onEvent: (e) => { if (e._hint) note(`  >> ${e.message}`); },
   };
   if (opts.replay) note(`replaying ${opts.replay} (no Bluetooth involved)`);
   note(`profile: ${profile.sex}, ${profile.age}y, ${profile.heightCm}cm`

@@ -28,6 +28,8 @@ const AREAS = {
   ELEC: 'The Electron main process and preload bridge',
   PLAT: 'Platform portability behaviours',
   DEFER: 'Capturing a reading before the profile is known',
+  HINT: 'Nudges: telling the user what only they can fix',
+  SIM: 'The rehearsal: capture, hold, compute',
   ROB: 'Robustness against malformed input',
 };
 
