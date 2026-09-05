@@ -325,6 +325,7 @@ function measureOnce(opts) {
     let hintCount = 0;
     const stopHints = () => { if (hintTimer) { clearInterval(hintTimer); hintTimer = null; } };
     const armHint = (code, message) => {
+      if (finished) return;              // nothing left to advise anyone about
       stopHints();
       hintCount = 0;
       hintTimer = setInterval(() => {
@@ -394,6 +395,16 @@ function measureOnce(opts) {
     });
 
     rl.on('line', (line) => {
+      /*
+       * The transport is killed 400 ms after a measurement finishes, and it
+       * keeps talking in that window. Without this guard a stray line emits
+       * progress AFTER the terminal event and, worse, re-arms a nudge that
+       * nothing can ever clear: stopHints() runs only from feed(), which
+       * returns early once settled, and finish(), which returns early once
+       * finished. The result was an interval firing forever.
+       */
+      if (finished) return;
+
       let ev;
       try { ev = JSON.parse(line); } catch (e) { return; }
       if (ev.t === 'log') {
@@ -708,7 +719,9 @@ async function serve(a) {
       heightCm: Number(req.profile.heightCm),
     };
     const opts = {
-      hintAfterSec: Number(req.hintAfterSec) || undefined,
+      // Per-request first, then the process default, exactly as scanTimeout
+      // does below. Without the fallback --hint-after was parsed and discarded.
+      hintAfterSec: Number(req.hintAfterSec) || a.hintAfterSec,
       name: req.deviceName || cfg.name || a.name,
       address: req.address || cfg[ADDRESS_KEY],
       profile: profile || { sex: 'male', age: 30, heightCm: 170 },
