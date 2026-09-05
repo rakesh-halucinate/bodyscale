@@ -552,6 +552,9 @@ function buildResult(res, profile, extra) {
       ? { key: bia.values.bodyFatRecommendedKey, value: bia.values[bia.values.bodyFatRecommendedKey] }
       : null,
     crossCheck: bia.crossCheck || null,
+    // What the scale's own app would report for the three values where the two
+    // conventions differ. Null when impedance was not usable.
+    vendorMatch: bia.vendorMatch || null,
     flags: bia.flags || [],
     warnings: bia.warnings || [],
     omitted: bia.omitted || {},

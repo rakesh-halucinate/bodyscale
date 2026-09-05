@@ -289,6 +289,45 @@
       if (v < rlo || v > rhi) flag('T10', 'warn', `${LABELS[key] || key} of ${v} is outside the plausible ${rlo} to ${rhi} for an adult ${sexKey}.`);
     }
 
+    /*
+     * What the scale's own app would say, from the same two numbers.
+     *
+     * Reverse-engineered from a real Dr Trust reading: 94.25 kg, 39, 180.34 cm,
+     * male, its app reporting 37.80% fat, 42.88 kg water, 58.62 kg fat-free.
+     * Its water and fat-free mass reproduce Sun 2003 and the Wang 1999
+     * hydration constant exactly, which is what this code already uses — so the
+     * two agree on the values that carry the impedance, to within rounding.
+     *
+     * Three differ, and each is a choice of convention rather than a mistake:
+     *
+     *   BMR              it uses Katch-McArdle off lean mass; this uses
+     *                    Mifflin-St Jeor off weight, height and age.
+     *   Skeletal muscle  it uses a flat 60% of fat-free mass; this uses
+     *                    Janssen 2000, which is a fitted equation.
+     *   Bone             a different fraction of fat-free mass. Both are
+     *                    arbitrary, neither has clinical validation.
+     *
+     * These are reported ALONGSIDE, never instead. Katch-McArdle is a published
+     * equation and legitimate; the other two are vendor conventions and are
+     * labelled as such. A host that wants to show figures matching the scale's
+     * own display can, without this file quietly becoming less rigorous.
+     */
+    if (out.trust.impedanceDerived) {
+      const vendorBone = ffm * 0.0665;
+      out.vendorMatch = {
+        note: "How this scale's own app computes the three values where the two differ. "
+            + 'Everything not listed here already agrees to within rounding.',
+        bmrKcal: round(370 + 21.6 * ffm, 0),
+        bmrBasis: 'Katch-McArdle, from lean mass',
+        skeletalMuscleMassKg: round(ffm * 0.60, 2),
+        skeletalMuscleBasis: 'a flat 60% of fat-free mass, vendor convention',
+        boneMassKg: round(vendorBone, 2),
+        boneBasis: '6.65% of fat-free mass, vendor convention',
+        muscleMassKg: round(ffm - vendorBone, 2),
+        muscleBasis: 'fat-free mass minus their bone figure',
+      };
+    }
+
     out.values.bodyFatRecommendedKey = out.trust.impedanceDerived ? 'bodyFatPercent' : 'bodyFatPercentBmiAnchor';
     out.unreliable = !out.trust.impedanceDerived;
     Object.assign(out.omitted, OMITTED);

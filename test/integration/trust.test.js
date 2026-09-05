@@ -689,3 +689,59 @@ test('INT-TRUST-26  the four payload shapes are distinguishable before any key l
   assert.notStrictEqual(shape(75, 0).n, shape(18.45, 1313.4).n,
     'a missing impedance and a non-person are different outcomes and must not be conflated');
 });
+
+// Prevents: the conclusion that the maths here is wrong because it disagrees
+// with the scale's own app. It does not disagree about anything the impedance
+// actually determines. Given the SAME impedance, water and fat-free mass and
+// body fat reproduce the app's figures to rounding, because both sides use
+// Sun 2003 and the Wang 1999 hydration constant. Only three values differ, and
+// each is a choice of convention. vendorMatch reports those three the way the
+// scale does, so a host can show figures identical to the device.
+test('INT-TRUST-27  vendorMatch reproduces the scale app, from a real reading', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+
+  // The reading the Dr Trust app reported: 94.25 kg, male, 39, 5ft 11in.
+  // 582 ohm is back-solved from its own total body water through Sun 2003.
+  const r = BIA.estimate({ weightKg: 94.25, impedanceOhm: 582, heightCm: 180.34, age: 39, sex: 'male' });
+  assert.strictEqual(r.trust.impedanceDerived, true, 'a plausible impedance is trusted');
+
+  const close = (ours, theirs, tol, what) =>
+    assert.ok(Math.abs(ours - theirs) <= tol,
+      `${what}: ours ${ours}, the app ${theirs}, differ by ${Math.abs(ours - theirs).toFixed(2)} (tolerance ${tol})`);
+
+  // What the impedance genuinely determines — these must already agree.
+  close(r.values.bodyFatPercent, 37.80, 0.2, 'body fat percent');
+  close(r.values.fatMassKg, 35.63, 0.2, 'fat mass');
+  close(r.values.bodyWaterLitres, 42.88, 0.2, 'total body water');
+  close(r.values.bodyWaterPercent, 45.50, 0.2, 'body water percent');
+  close(r.values.fatFreeMassKg, 58.62, 0.2, 'fat-free mass');
+  close(r.values.bmi, 29.10, 0.2, 'BMI');
+
+  // The three that differ by convention, reported the scale's way.
+  const vm = r.vendorMatch;
+  assert.ok(vm, 'vendorMatch is present when the impedance is usable');
+  close(vm.bmrKcal, 1634, 3, 'vendor BMR (Katch-McArdle)');
+  close(vm.skeletalMuscleMassKg, 35.20, 0.2, 'vendor skeletal muscle');
+  close(vm.boneMassKg, 3.90, 0.05, 'vendor bone mass');
+  close(vm.muscleMassKg, 54.66, 0.2, 'vendor muscle mass');
+
+  // And ours are still the published ones, not quietly replaced.
+  assert.notStrictEqual(r.values.bmrKcal, vm.bmrKcal, 'our BMR is still Mifflin-St Jeor');
+  assert.notStrictEqual(r.values.skeletalMuscleMassKg, vm.skeletalMuscleMassKg,
+    'our skeletal muscle is still Janssen 2000');
+  for (const k of ['bmrBasis', 'skeletalMuscleBasis', 'boneBasis', 'muscleBasis']) {
+    assert.ok(typeof vm[k] === 'string' && vm[k].length > 5, `${k} says which convention it is`);
+  }
+});
+
+// Prevents: a host reading vendorMatch off an untrustworthy reading and showing
+// figures that look like the scale's but are built on a rejected impedance.
+test('INT-TRUST-28  vendorMatch is withheld when the impedance is not usable', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+  const bad = BIA.estimate({ weightKg: 98.2, impedanceOhm: 1978.7, heightCm: 180, age: 39, sex: 'male' });
+  assert.strictEqual(bad.trust.impedanceDerived, false, 'the reading was rejected');
+  assert.ok(!bad.vendorMatch, 'so there is nothing to compare against the scale');
+
+  const none = BIA.estimate({ weightKg: 98.2, impedanceOhm: 0, heightCm: 180, age: 39, sex: 'male' });
+  assert.ok(!none.vendorMatch, 'and none at all without an impedance');
+});
