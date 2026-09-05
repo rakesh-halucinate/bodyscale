@@ -417,7 +417,7 @@ test('INT-ELEC-09  scale:status answers idle, with the remembered device', async
 //
 // This is the FIRST measurement in the file, and it is the only test that may
 // rely on the seeded config still being untouched.
-test('INT-ELEC-10  the first measurement remembers the scale and drops the inherited profile', async () => {
+test('INT-ELEC-10  the first measurement remembers the scale and leaves the profile alone', async () => {
   await boot();
   const before = readConfigFile();
   assert.deepStrictEqual(before.profile, { sex: 'female', age: 61, heightCm: 155 },
@@ -428,7 +428,8 @@ test('INT-ELEC-10  the first measurement remembers the scale and drops the inher
   assert.strictEqual(r.ok, true, JSON.stringify(r));
 
   const after = readConfigFile();
-  assert.strictEqual('profile' in after, false, 'the inherited profile was deleted, not rewritten');
+  assert.ok('profile' in after,
+    'an existing profile is left as it was: the service neither uses nor removes it');
   assert.strictEqual(after[ADDRESS_KEY], r.result.device.address,
     'the device just measured is the one remembered');
   assert.notStrictEqual(after[ADDRESS_KEY], 'OLD-ADDRESS', 'the stale address was replaced');
@@ -774,7 +775,8 @@ test('INT-ELEC-23  scale:forget clears the remembered device from status and fro
 
   const cfg = readConfigFile();
   assert.strictEqual(ADDRESS_KEY in cfg, false, 'and the address is gone from the file');
-  assert.strictEqual('profile' in cfg, false, 'forget did not resurrect a profile either');
+  assert.ok('profile' in cfg,
+    'forget clears the device, not the terminal tool profile that sits beside it');
   assert.strictEqual(cfg.name, H.EXPECTED.name, 'the scale\'s name is all that is left');
 });
 

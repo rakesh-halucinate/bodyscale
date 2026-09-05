@@ -224,7 +224,20 @@ const readConfig = () => {
   for (const file of [CONFIG, LEGACY_CONFIG]) {           // new location wins
     try { c = JSON.parse(fs.readFileSync(file, 'utf8')); break; } catch (e) { /* try the next */ }
   }
-  if (!c || typeof c !== 'object') return {};
+  if (!c || typeof c !== 'object') c = {};
+  // The per-user config may have been created by a run that never knew the
+  // profile, while the older file beside the script still holds the real one.
+  // Adopt it rather than leaving the user silently measured as someone else.
+  //
+  // Only when using the DEFAULT location. A caller that named a config
+  // directory — a test, or a host with its own data directory — asked for
+  // isolation, and reaching back to the script directory would break it.
+  if (!c.profile && !process.env.BODYSCALE_CONFIG_DIR) {
+    try {
+      const legacy = JSON.parse(fs.readFileSync(LEGACY_CONFIG, 'utf8'));
+      if (legacy && legacy.profile) c.profile = legacy.profile;
+    } catch (e) { /* no legacy file, or unreadable */ }
+  }
   // Earlier versions stored one address with no platform key. Adopt it only on
   // macOS, where it was written; a CoreBluetooth UUID means nothing elsewhere.
   if (c.address && !c[ADDRESS_KEY] && process.platform === 'darwin') {
@@ -623,9 +636,13 @@ async function serve(a) {
       cfg[ADDRESS_KEY] = res.device.address;
       cfg.name = res.device.name;
       // The device identity is remembered, so the next scan is instant. The
-      // profile is NOT: in service mode the host owns age, height and sex, it
-      // sends them with every request, and this process keeps no copy.
-      if (cfg.profile) delete cfg.profile;
+      // profile is NOT written here: in service mode the host owns age, height
+      // and sex and sends them with every request.
+      //
+      // An existing profile is left alone rather than deleted. It belongs to
+      // the terminal tool, which is a different surface with a real need to
+      // remember it. Deleting it here silently reset a CLI user's age and
+      // height to the fallback defaults, and every derived figure with them.
       writeConfig(cfg);
     }
     if (res.outcome === 'ok' && res.capture.weight > 0) {
@@ -703,11 +720,19 @@ async function main() {
   let cfg = readConfig();
   if (a.forget) { cfg = { profile: cfg.profile, name: cfg.name }; delete cfg[ADDRESS_KEY]; writeConfig(cfg); note('forgot the saved device'); }
 
+  // Track where each field came from. A guessed age or height must never be
+  // written back to disk: doing so turns "nobody told me" into "you are 30 and
+  // 170 cm" permanently, and every later run inherits it looking deliberate.
+  const stored = cfg.profile || {};
+  const knownAge = Number.isFinite(a.age) || Number.isFinite(stored.age);
+  const knownHeight = Number.isFinite(a.heightCm) || Number.isFinite(stored.heightCm);
   const profile = {
-    sex: a.sex || (cfg.profile && cfg.profile.sex) || 'male',
-    age: Number.isFinite(a.age) ? a.age : (cfg.profile && cfg.profile.age) || 30,
-    heightCm: Number.isFinite(a.heightCm) ? a.heightCm : (cfg.profile && cfg.profile.heightCm) || 170,
+    sex: a.sex || stored.sex || 'male',
+    age: Number.isFinite(a.age) ? a.age : (Number.isFinite(stored.age) ? stored.age : 30),
+    heightCm: Number.isFinite(a.heightCm) ? a.heightCm
+      : (Number.isFinite(stored.heightCm) ? stored.heightCm : 170),
   };
+  const profileIsGuessed = !knownAge || !knownHeight;
   const opts = {
     name: a.name, address: a.address || cfg[ADDRESS_KEY], profile, raw: a.raw, replay: a.replay,
     scanTimeout: a.scanTimeout, connectTimeout: a.connectTimeout, hold: a.hold, python: a.python,
@@ -715,6 +740,14 @@ async function main() {
   if (opts.replay) note(`replaying ${opts.replay} (no Bluetooth involved)`);
   note(`profile: ${profile.sex}, ${profile.age}y, ${profile.heightCm}cm`
        + (opts.address ? `   saved address ${opts.address}` : `   scanning for "${opts.name}"`));
+  if (profileIsGuessed) {
+    note('');
+    note(`  !! ${!knownAge ? 'Age' : 'Height'} was never given, so a default is being used.`);
+    note('     Body composition will be computed for the wrong person.');
+    note('     Set it once and it is remembered:');
+    note('       node scale.js --sex male --age 39 --height 180');
+    note('');
+  }
   if (opts.address && !opts.replay) note(`(identifier is ${process.platform === 'darwin' ? 'a CoreBluetooth UUID, specific to this Mac' : 'a Bluetooth MAC address'})`);
 
   const interval = Number.isFinite(a.interval) ? a.interval : 3;
@@ -737,7 +770,10 @@ async function main() {
     if (stopping) break;
 
     if (res.device && res.device.address) {
-      cfg[ADDRESS_KEY] = res.device.address; cfg.name = res.device.name; cfg.profile = profile;
+      cfg[ADDRESS_KEY] = res.device.address; cfg.name = res.device.name;
+      // Only a profile the user actually supplied is remembered. Persisting a
+      // guess makes it indistinguishable from a real setting on the next run.
+      if (!profileIsGuessed) cfg.profile = profile;
       writeConfig(cfg);
       opts.address = res.device.address;
     }

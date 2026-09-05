@@ -477,7 +477,7 @@ test('INT-PLAT-07  a legacy address alongside a platform key survives a write un
 // Prevents: the service quietly becoming the owner of the person's details.
 // The host sends age, height and sex on every measure; a copy kept here would
 // go stale, and would be a body-composition profile sitting in a plain file.
-test('INT-PLAT-08  the profile is never persisted and an inherited one is deleted', async () => {
+test('INT-PLAT-08  the profile is never persisted, and an existing one is left alone', async () => {
   const dir = configDirWith('plat08', {
     profile: { sex: 'female', age: 22, heightCm: 155 },
     name: 'OLD-NAME',
@@ -490,15 +490,21 @@ test('INT-PLAT-08  the profile is never persisted and an inherited one is delete
     'the reply echoes the profile the host sent, not the one in the file');
 
   const saved = readSaved(dir);
-  assert.strictEqual('profile' in saved, false, 'the inherited profile was deleted');
+  // The service neither writes a profile nor removes one. The terminal tool
+  // owns that key, and deleting it silently reset a real user's age and height.
+  assert.ok('profile' in saved, 'an existing profile survives a service measurement');
   for (const leaked of ['age', 'heightCm', 'sex', 'weightKg']) {
     assert.strictEqual(leaked in saved, false, `${leaked} was not persisted at the top level either`);
   }
   // The device identity is the one thing that is meant to survive.
   assert.strictEqual(saved[ADDRESS_KEY], REPLAY_ADDRESS, 'the device address was updated and kept');
   assert.strictEqual(saved.name, H.EXPECTED.name, 'the device name was updated and kept');
-  assert.deepStrictEqual(Object.keys(saved).sort(), [ADDRESS_KEY, 'name'].sort(),
-    'the saved config is nothing but the device identity');
+  // The service adds nothing but the device identity. The profile key is
+  // present only because it was already there; the service never created it.
+  assert.deepStrictEqual(Object.keys(saved).sort(), [ADDRESS_KEY, 'name', 'profile'].sort(),
+    'the service added the device identity and nothing else of its own');
+  assert.deepStrictEqual(saved.profile, { sex: 'female', age: 22, heightCm: 155 },
+    'and the pre-existing profile is byte-identical, neither read nor rewritten');
 });
 
 // Prevents: a locked-down Windows install failing silently — the config write

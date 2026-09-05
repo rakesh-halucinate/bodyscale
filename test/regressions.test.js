@@ -305,7 +305,7 @@ test('the transport self-test reports its own health as JSON', async () => {
 
 // --- profile ownership: the host owns age, height and sex, not this service ---
 
-test('the service never stores the profile, and strips one it inherits', async () => {
+test('the service never stores the profile, and leaves the terminal tool one alone', async () => {
   // The Electron app is the sole authority for the person. A copy kept here
   // could outlive the host's own record and be silently wrong, and it is
   // personal data this process has no reason to hold.
@@ -326,7 +326,11 @@ test('the service never stores the profile, and strips one it inherits', async (
   assert.ok(events.find((e) => e.type === 'measurement'), 'the measurement succeeded');
 
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'scale-config.json'), 'utf8'));
-  assert.ok(!('profile' in cfg), 'the inherited profile was removed, not carried forward');
+  // It must not WRITE a profile. It must also not DELETE one: that config
+  // belongs to the terminal tool, and removing it reset a user's age and
+  // height to fallback defaults with nothing on screen to say so.
+  assert.deepStrictEqual(cfg.profile, { sex: 'female', age: 44, heightCm: 162 },
+    'the stored profile is untouched, neither used nor destroyed');
   assert.ok(cfg[`address_${process.platform}`], 'the device identity is still remembered');
 });
 

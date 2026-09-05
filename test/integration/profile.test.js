@@ -202,9 +202,14 @@ test('INT-PROF-13  a completed measurement writes no profile to disk', async () 
   assert.ok(cfg[`address_${process.platform}`], 'but the device identity was remembered');
 });
 
-// Prevents: a profile left by an older build lingering on disk indefinitely
-// after the app took ownership of that data.
-test('INT-PROF-14  a profile inherited from an older config is deleted', async () => {
+// Prevents: the service quietly adopting a stored profile instead of the one
+// the host sent. It must read the request and only the request — a config left
+// by the terminal tool describes a different person as far as the host knows.
+//
+// It must also not DELETE that profile, which an earlier version did: the
+// terminal tool owns it, and removing it reset a user's age and height to
+// fallback defaults without a word. INT-PROF-21 covers that side.
+test('INT-PROF-14  a stored profile is ignored in favour of the one sent', async () => {
   const dir = H.tmpdir('prof-inherit');
   fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({
     name: 'SSW533',
@@ -221,9 +226,14 @@ test('INT-PROF-14  a profile inherited from an older config is deleted', async (
   });
   assert.ok(H.first(events, 'measurement'), 'the measurement succeeded');
 
+  const m = H.first(events, 'measurement');
+  assert.deepStrictEqual(m.profile, { sex: 'male', age: 39, heightCm: 180 },
+    'the measurement used the profile from the request, not the one on disk');
+
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'scale-config.json'), 'utf8'));
-  assert.ok(!('profile' in cfg), 'the inherited profile was removed');
-  assert.ok(cfg[`address_${process.platform}`], 'the device identity survived');
+  assert.deepStrictEqual(cfg.profile, { sex: 'female', age: 44, heightCm: 162 },
+    'and left the stored one untouched, because the terminal tool owns it');
+  assert.ok(cfg[`address_${process.platform}`], 'the device identity was remembered');
 });
 
 // Prevents: the worst version of this — the service silently measuring against
@@ -320,4 +330,113 @@ test('INT-PROF-20  each measurement uses only the profile sent with it', async (
   assert.deepStrictEqual(one.profile, { sex: 'male', age: 39, heightCm: 180 });
   assert.deepStrictEqual(two.profile, { sex: 'female', age: 25, heightCm: 165 });
   assert.notStrictEqual(one.derived.bmi, two.derived.bmi, 'and the second used its own height');
+});
+
+// --- the CLI's own profile, which the service must not disturb ---------------
+
+const { execFileSync } = require('child_process');
+
+/** Run the terminal tool against the recorded session in an isolated config. */
+function cli(args, dir) {
+  return execFileSync(process.execPath, [H.SCALE, '--replay', H.FIXTURE, ...args], {
+    cwd: H.ROOT, encoding: 'utf8', timeout: 30000,
+    env: Object.assign({}, process.env, { BODYSCALE_CONFIG_DIR: dir }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+/** stderr carries the commentary; execFileSync only returns stdout. */
+function cliStderr(args, dir) {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath, [H.SCALE, '--replay', H.FIXTURE, ...args], {
+    cwd: H.ROOT, encoding: 'utf8', timeout: 30000,
+    env: Object.assign({}, process.env, { BODYSCALE_CONFIG_DIR: dir }),
+  });
+  return r.stderr || '';
+}
+
+// Prevents: the exact regression seen in the field. Service mode used to DELETE
+// the stored profile, so the next terminal run found none, fell back to 30 and
+// 170, and reported body composition for a person who does not exist — with
+// nothing on screen to say the age and height were invented.
+test('INT-PROF-21  a service-mode measurement leaves the terminal tool profile intact', async () => {
+  const dir = H.tmpdir('prof-coexist');
+  fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({
+    name: 'SSW533',
+    profile: { sex: 'female', age: 44, heightCm: 162 },
+    [`address_${process.platform}`]: 'KNOWN',
+  }));
+
+  const { events } = await H.serve({
+    env: { BODYSCALE_CONFIG_DIR: dir },
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'm', cmd: 'measure', profile: H.PROFILE }); return false; }
+      return ev.type === 'measurement' || ev.type === 'error';
+    },
+  });
+  const m = H.first(events, 'measurement');
+  assert.ok(m, 'the service measurement succeeded');
+  assert.deepStrictEqual(m.profile, { sex: 'male', age: 39, heightCm: 180 },
+    'and used the profile the HOST sent, not the stored one');
+
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'scale-config.json'), 'utf8'));
+  assert.deepStrictEqual(cfg.profile, { sex: 'female', age: 44, heightCm: 162 },
+    "the terminal tool's own profile was left exactly as it was");
+});
+
+// Prevents: a guess hardening into a setting. Writing an invented age back to
+// disk makes it indistinguishable from one the user chose, so every later run
+// inherits it silently and looks deliberate.
+test('INT-PROF-22  an invented profile is never written to disk', async () => {
+  const dir = H.tmpdir('prof-guess');
+  fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({ name: 'SSW533' }));
+
+  cli(['--quiet'], dir);
+
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'scale-config.json'), 'utf8'));
+  assert.ok(!cfg.profile, `no profile was persisted, got ${JSON.stringify(cfg.profile)}`);
+});
+
+// Prevents: the silent version of the same failure. If the tool must guess, it
+// has to say so loudly enough that the user fixes it, because every derived
+// figure below is computed for the wrong person.
+test('INT-PROF-23  a guessed profile is announced, not applied quietly', async () => {
+  const dir = H.tmpdir('prof-warn');
+  fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({ name: 'SSW533' }));
+
+  const stderr = cliStderr([], dir);
+  assert.match(stderr, /never given/i, 'it says a value was missing');
+  assert.match(stderr, /wrong person/i, 'and what that costs');
+  assert.match(stderr, /--age/, 'and how to fix it');
+});
+
+// Prevents: the opposite failure — nagging a user who HAS set their profile.
+test('INT-PROF-24  a profile the user supplied is remembered and never warned about', async () => {
+  const dir = H.tmpdir('prof-known');
+  fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({ name: 'SSW533' }));
+
+  const first = cliStderr(['--sex', 'female', '--age', '44', '--height', '162'], dir);
+  assert.doesNotMatch(first, /never given/i, 'a supplied profile draws no warning');
+
+  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'scale-config.json'), 'utf8'));
+  assert.deepStrictEqual(cfg.profile, { sex: 'female', age: 44, heightCm: 162 },
+    'and it is remembered, so later runs need no flags');
+
+  const second = cliStderr([], dir);
+  assert.doesNotMatch(second, /never given/i, 'nor does the run that reads it back');
+  assert.match(second, /44y, 162cm/, 'which uses the remembered values');
+});
+
+// Prevents: the migration reaching back into the project directory when a
+// caller explicitly asked for an isolated config, which is how twenty-one
+// concurrent test files started sharing one developer's stored profile.
+test('INT-PROF-25  the legacy migration respects an explicit config directory', async () => {
+  const dir = H.tmpdir('prof-isolated');
+  fs.writeFileSync(path.join(dir, 'scale-config.json'), JSON.stringify({ name: 'SSW533' }));
+
+  const stderr = cliStderr([], dir);
+  // The project has a .scale-config.json beside the script carrying a profile.
+  // An isolated run must not adopt it.
+  assert.match(stderr, /never given/i,
+    'an isolated run found no profile, rather than borrowing the one beside the script');
 });
