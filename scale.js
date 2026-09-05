@@ -284,6 +284,9 @@ function measureOnce(opts) {
                   '--hold', String(opts.hold)];
     if (opts.name) args.push('--name', opts.name);
     if (opts.address) args.push('--address', opts.address);
+    // The record channel only, to begin with. The weight stream is added once
+    // the scale announces its session, which is the order the vendor app uses.
+    args.push('--chars', 'ffb3');
 
     // Prove the transport can run before starting anything. A transport that
     // cannot work must fail as a transport problem, not as a scale that would
@@ -447,7 +450,16 @@ function measureOnce(opts) {
       hex: BCS.hex,
       // ble.py already subscribes to everything notifiable, so there is nothing
       // for a driver to turn on here.
-      subscribe: async () => true,
+      subscribe: async (svc, chr) => {
+        if (opts.replay) return true;
+        const uuid = `0000${chr.toString(16).padStart(4, '0')}`;
+        if (!py.stdin || py.stdin.destroyed || py.stdin.writableEnded) return false;
+        try {
+          py.stdin.write(JSON.stringify({ cmd: 'subscribe', char: uuid }) + '\n');
+          note(`  -> subscribing to 0x${chr.toString(16)}`);
+          return true;
+        } catch (e) { return false; }
+      },
       subscribeAll: async () => {},
       /*
        * Put a packet on the wire.

@@ -142,15 +142,34 @@ async def run(args):
         def frame(ch, data: bytearray):
             emit(t="frame", uuid=str(ch.uuid), hex=" ".join(f"{b:02x}" for b in data))
 
-        subscribed = 0
-        for service in client.services:
-            for ch in service.characteristics:
-                if "notify" in ch.properties or "indicate" in ch.properties:
+        async def subscribe_to(want):
+            """Subscribe to named characteristics, or to everything if none named.
+
+            Subscribing blindly to every notify characteristic is not harmless.
+            This scale exposes a Nordic DFU characteristic (0x1531) alongside its
+            own, and a client that turns on notifications for a firmware-update
+            channel is not behaving like the phone app. The vendor app subscribes
+            to the record channel first and adds the weight stream only once the
+            scale has announced its session, so the order is a signal in itself.
+            """
+            n = 0
+            for service in client.services:
+                for ch in service.characteristics:
+                    if "notify" not in ch.properties and "indicate" not in ch.properties:
+                        continue
+                    short = str(ch.uuid).lower()
+                    if want and not any(w in short for w in want):
+                        continue
                     try:
                         await client.start_notify(ch, frame)
-                        subscribed += 1
+                        log(f"subscribed to {ch.uuid}")
+                        n += 1
                     except Exception as exc:                       # noqa: BLE001
                         log(f"could not subscribe to {ch.uuid}: {exc}", "warn")
+            return n
+
+        wanted = [w.strip().lower() for w in (args.chars or "").split(",") if w.strip()]
+        subscribed = await subscribe_to(wanted)
         if not subscribed:
             log("nothing on this device can push data", "error")
             emit(t="end", reason="no-notifications")
@@ -220,6 +239,10 @@ async def run(args):
                         if isinstance(req, dict) and req.get("cmd") == "write":
                             loop.call_soon_threadsafe(
                                 lambda r=req: asyncio.ensure_future(do_write(r)))
+                        elif isinstance(req, dict) and req.get("cmd") == "subscribe":
+                            loop.call_soon_threadsafe(
+                                lambda r=req: asyncio.ensure_future(
+                                    subscribe_to([str(r.get("char", "")).lower()])))
                 except Exception:                     # noqa: BLE001  closed pipe
                     pass
                 loop.call_soon_threadsafe(done.set)
@@ -293,6 +316,10 @@ def main():
     ap.add_argument("--scan-timeout", type=float, default=20.0)
     ap.add_argument("--connect-timeout", type=float, default=20.0)
     ap.add_argument("--hold", type=float, default=120.0, help="give up after this many seconds")
+    ap.add_argument("--chars", default="",
+                    help="comma-separated characteristic UUIDs to subscribe to at first; "
+                         "empty means every notify characteristic, which is rarely what a "
+                         "vendor app does")
     ap.add_argument("--selftest", action="store_true",
                     help="check that this interpreter can import bleak, then exit")
     args = ap.parse_args()

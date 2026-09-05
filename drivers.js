@@ -111,11 +111,20 @@
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
         profileSent: false,
       };
-      ctx.log('Dr Trust driver: subscribing to the record channel 0xFFB3 and the live weight stream 0xFFB2.', 'ok');
+      /*
+       * The record channel first, and ONLY that.
+       *
+       * The vendor app subscribes to 0xFFB3, waits for the scale to announce
+       * its session, and only then turns on the weight stream. Turning both on
+       * at once — and worse, turning on every notify characteristic the device
+       * exposes, including its Nordic DFU channel — is not what the scale sees
+       * from the app it was built for, and this firmware only runs its full
+       * impedance program for a client that behaves like one.
+       */
+      ctx.log('Dr Trust driver: subscribing to the record channel 0xFFB3 and waiting for the session.', 'ok');
       const a = await ctx.subscribe(0xffb0, 0xffb3);
-      const b = await ctx.subscribe(0xffb0, 0xffb2);
-      if (!a && !b) ctx.log('Could not subscribe to either channel. Tap the scale to wake it and reconnect.', 'err');
-      else ctx.log('Ready. Step on the scale. This firmware streams without a handshake.', 'ok');
+      if (!a) ctx.log('Could not subscribe to the record channel. Tap the scale to wake it and reconnect.', 'err');
+      else ctx.log('Ready. Step on the scale.', 'ok');
     },
 
     async sendProfile(ctx) {
@@ -235,6 +244,9 @@
          */
         if (!st.profileSent) {
           st.profileSent = true;
+          // The weight stream goes on now, after the session frame, not before.
+          Promise.resolve(ctx.subscribe(0xffb0, 0xffb2))
+            .catch(() => {});
           Promise.resolve(drTrust.sendProfile(ctx))
             .catch((e) => ctx.log(`  Dr Trust: handshake failed: ${e.message}`, 'warn'));
         }
