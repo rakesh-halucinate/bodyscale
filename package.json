@@ -14,7 +14,8 @@
     "test:raw": "node --test test/*.test.js test/integration/*.test.js",
     "verify": "./verify.sh",
     "simulate": "node simulate.js",
-    "simulate:replay": "node simulate.js --replay"
+    "simulate:replay": "node simulate.js --replay",
+    "compare": "node compare.js"
   },
   "allowScripts": {
     "@abandonware/noble@1.9.2-26": true

@@ -205,7 +205,16 @@ async function main() {
     let captured;
     try {
       // No profile. The radio window is short; the age is not urgent.
-      captured = await client.measureWithoutProfile();
+      //
+      // Generous windows on purpose. A real scan of a sleeping scale has taken
+      // 8 to 14 seconds in the field, and the first run may also be waiting on
+      // the macOS Bluetooth prompt. The nudge fires long before either expires,
+      // so the person is told what to do rather than left watching nothing.
+      captured = await client.measureWithoutProfile({
+        scanTimeoutSec: Number(arg('--scan-timeout', 90)),
+        timeoutSec: Number(arg('--hold', 180)),
+        hintAfterSec: Number(arg('--hint-after', 8)),
+      });
     } catch (err) {
       clearLive();
       client.off('progress', onProgress);
