@@ -235,3 +235,79 @@ test('INT-DEFER-12  a deferred capture still remembers the device', async () => 
   assert.ok(cfg[`address_${process.platform}`], 'the device is remembered, so the next scan is instant');
   assert.ok(!cfg.profile, 'and no profile was invented');
 });
+
+// Prevents: a host racing the radio window to collect an age it does not need
+// yet — showing a rushed form while someone stands on a scale, or discarding a
+// good reading because the profile arrived "too late". There is no deadline.
+// The reading survives the transport exiting, the service exiting, and being
+// interpreted by a different service instance that never saw the scale.
+test('INT-DEFER-13  a captured reading outlives the service that took it', async () => {
+  // 1. Capture while the radio is awake, then let the service exit entirely.
+  const first = await H.serve({
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'm', cmd: 'measure', withoutProfile: true }); return false; }
+      return ev.type === 'measurement' || ev.type === 'error';
+    },
+  });
+  const taken = H.first(first.events, 'measurement');
+  assert.ok(taken, 'the reading was captured');
+  assert.strictEqual(first.code, 0, 'and the service exited, releasing the radio');
+
+  // 2. A gap with nothing running at all.
+  await new Promise((r) => setTimeout(r, 750));
+
+  // 3. A BRAND NEW service, on the real radio path, with no scale present.
+  const second = await H.serve({
+    replay: null,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') {
+        send({ id: 'c', cmd: 'compute', measured: taken.measured,
+               measuredAt: taken.timestamp, profile: PROFILE });
+        return false;
+      }
+      return ev.type === 'measurement' || ev.type === 'error';
+    },
+  });
+  const computed = H.first(second.events, 'measurement');
+  assert.ok(computed, 'a different service interpreted it with no scale in the room');
+  assert.deepStrictEqual(computed.measured, taken.measured, 'the reading is unchanged');
+  assert.strictEqual(Object.keys(computed.derived).length, 24, 'the full panel came out');
+  assert.strictEqual(computed.measuredAt, taken.timestamp, 'and still knows when it was taken');
+  assert.deepStrictEqual(H.byType(second.events, 'progress'), [],
+    'no progress at all: nothing was scanned for and nothing connected');
+});
+
+// Prevents: the belief that a deferred capture holds the radio open waiting for
+// a profile. It does not — the transport is killed as soon as the reading
+// settles, exactly as it is for a normal measurement.
+test('INT-DEFER-14  a deferred capture releases the transport immediately', async () => {
+  const { events, code } = await H.serve({
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'm', cmd: 'measure', withoutProfile: true }); return false; }
+      if (ev.type === 'measurement') { send({ id: 's', cmd: 'status' }); return false; }
+      return ev.type === 'status';
+    },
+  });
+  assert.ok(H.first(events, 'measurement'), 'the reading arrived');
+  const st = H.first(events, 'status');
+  assert.strictEqual(st.busy, false, 'the service is idle the moment the reading lands');
+  assert.strictEqual(st.runningId, null, 'nothing is still held open awaiting a profile');
+  assert.strictEqual(code, 0, 'and it shut down cleanly with no lingering child');
+});
+
+// Prevents: a host assuming `measured` needs the service to stay alive to be
+// meaningful. It is two plain numbers; it can be stored and interpreted later,
+// on another day or another machine.
+test('INT-DEFER-15  a measured pair is plain data a host can store and bring back', async () => {
+  const stored = JSON.parse(JSON.stringify({ weightKg: 97.9, impedanceOhm: 529.9 }));
+  const { events } = await H.serve({
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'c', cmd: 'compute', measured: stored, profile: PROFILE }); return false; }
+      return ev.type === 'measurement' || ev.type === 'error';
+    },
+  });
+  const m = H.first(events, 'measurement');
+  assert.ok(m, 'a pair that never came from this service instance is accepted');
+  assert.strictEqual(m.derived.bodyFatPercent > 0, true);
+  assert.strictEqual(m.source, 'recomputed');
+});
