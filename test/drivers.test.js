@@ -279,3 +279,68 @@ test('the full real weigh-in sequence ends on 98.50 kg with 308.6 ohm', async ()
   assert.equal(final.values.state, 'final');
   assert.equal(out.filter((r) => r && r.values && r.values.state === 'idle').length, 1);
 });
+
+/*
+ * The impedance program has to be asked for.
+ *
+ * Nothing we did to the decoder could ever have produced body composition,
+ * because the scale was never told to measure any. These lock the request and
+ * the two profile fields that were being sent as constants.
+ */
+test('Dr Trust: the weight locking asks the scale to start its impedance program', async () => {
+  const writes = [];
+  const ctx = {
+    state: { drt: { session: 0x2a, biaRequested: false } },
+    profile: () => ({ heightCm: 180, age: 39, sex: 'male' }),
+    now: () => 1757072503000,
+    log: () => {},
+    write: async (svc, chr, bytes, what) => { writes.push({ chr, bytes: [...bytes], what }); return true; },
+  };
+
+  await D.drTrust.startBia(ctx, 96.4);
+
+  const start = writes.find((w) => /BD 09/i.test(w.what));
+  assert.ok(start, `no start command was sent; wrote [${writes.map((w) => w.what).join(', ')}]`);
+  assert.strictEqual(start.chr, 0xffb1, 'the command channel, not the notify one');
+  assert.deepStrictEqual(start.bytes.slice(0, 5), [0x02, 0x02, 0x00, 0xbd, 0x09],
+    'seq 2, length 2, fragment 0, type 0xBD, subcommand 0x09');
+  assert.strictEqual(start.bytes.length, 20);
+  // sum(bytes[3..18]) mod 32 = (0xBD + 0x09) mod 32 = 198 mod 32 = 6.
+  assert.strictEqual(start.bytes[19], 0x06, 'checksum over bytes 3..18, mod 32');
+
+  // It is asked for once per step-on, not once per settled frame.
+  const before = writes.length;
+  await D.drTrust.startBia(ctx, 96.4);
+  assert.strictEqual(writes.length, before, 'a second call must not re-ask');
+});
+
+test('Dr Trust: the profile declares the real weight and the real sex', async () => {
+  const run = async (sex, kg) => {
+    const writes = [];
+    const ctx = {
+      state: { drt: { session: 0x2a } },
+      profile: () => ({ heightCm: 180, age: 39, sex }),
+      now: () => 1757072503000,
+      log: () => {},
+      write: async (s2, c, bytes, what) => { writes.push({ bytes: [...bytes], what }); return true; },
+    };
+    await D.drTrust.sendProfile(ctx, kg);
+    return writes.find((w) => /user profile/.test(w.what));
+  };
+
+  const male = await run('male', 96.4);
+  // Declared weight is a big-endian hundredth-kilo field at bytes 12 and 13.
+  assert.strictEqual((male.bytes[12] << 8) | male.bytes[13], 9640,
+    'the person on the scale weighs 96.4 kg, not openScale\'s hardcoded 60.00');
+  assert.strictEqual(male.bytes[14], 0x80 | 39, 'sex bit set for male, age in the low bits');
+  assert.strictEqual(male.bytes[11], 180, 'height in cm');
+
+  const female = await run('female', 61.5);
+  assert.strictEqual((female.bytes[12] << 8) | female.bytes[13], 6150);
+  assert.strictEqual(female.bytes[14], 39, 'sex bit clear for female');
+
+  // Absent a weight we still have to send something, but it must stay in range.
+  const unknown = await run('male', undefined);
+  const declared = (unknown.bytes[12] << 8) | unknown.bytes[13];
+  assert.ok(declared >= 1000 && declared <= 30000, `declared ${declared} out of range`);
+});
