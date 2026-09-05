@@ -20,6 +20,7 @@ Events emitted, one JSON object per line:
 """
 import argparse
 import asyncio
+import errno
 import json
 import os
 import platform
@@ -37,8 +38,30 @@ except Exception as _exc:                                          # noqa: BLE00
 
 
 def emit(**obj):
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    """Write one protocol line, and leave quietly if nobody is listening.
+
+    A closed pipe is the NORMAL end of a measurement, not a fault: the parent
+    took its reading and killed this process, and the two events race. There is
+    no one left to tell, so reporting it is impossible by definition — and
+    trying anyway is what turned one closed pipe into three tracebacks on the
+    user's terminal after a measurement that had already succeeded.
+
+    os._exit is deliberate. A normal exit would run the interpreter's own final
+    flush of stdout, which raises the same BrokenPipeError again on the way out
+    and prints "Exception ignored in: <_io.TextIOWrapper name='<stdout>'>".
+    Leaving immediately also releases the Bluetooth link sooner.
+    """
+    try:
+        sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os._exit(0)
+    except ValueError:                    # "I/O operation on closed file"
+        os._exit(0)
+    except OSError as exc:
+        if exc.errno in (errno.EPIPE, errno.EBADF):
+            os._exit(0)
+        raise
 
 
 def log(msg, level="info"):
@@ -249,8 +272,11 @@ def main():
     log(f"platform {platform.system()} {platform.release()}, python {sys.version.split()[0]}")
     try:
         code = asyncio.run(run(args))
-        sys.stdout.flush()
-        sys.stderr.flush()
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            os._exit(0)               # the parent is already gone
         # Every line is flushed as it is written, and both streams are flushed
         # again here, so nothing is lost. _exit skips any remaining atexit work
         # and the daemon reader, which may still be parked on a read.
@@ -258,6 +284,11 @@ def main():
     except KeyboardInterrupt:
         emit(t="end", reason="interrupted")
         sys.exit(130)
+    except (BrokenPipeError, ValueError):
+        # The parent closed the pipe while we were mid-write. There is no
+        # channel left to explain that on, so do not try; emit() would raise
+        # again inside this very handler.
+        os._exit(0)
     except Exception as exc:                                       # noqa: BLE001
         log(f"{type(exc).__name__}: {exc}", "error")
         reason = classify_failure(exc)

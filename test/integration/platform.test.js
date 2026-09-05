@@ -864,3 +864,57 @@ test('INT-PLAT-22  the PERMISSION_DENIED and BLUETOOTH_UNAVAILABLE messages are 
   assert.match(denied, /refused/i, 'it names the refusal');
   assert.match(denied, /bluetooth/i, 'and what was refused');
 });
+
+// Prevents: the traceback a user sees on their terminal AFTER a measurement has
+// already succeeded. scale.js takes its reading and closes the pipe; the
+// transport is still mid-write. One closed pipe used to cascade into three
+// separate failures — the final `end` event, the error handler trying to LOG
+// that failure down the same dead pipe, and the interpreter's own exit flush
+// raising it a third time as "Exception ignored in: <_io.TextIOWrapper>".
+// A closed pipe is the normal end of a measurement, not a fault.
+test('INT-PLAT-23  the transport exits quietly when its reader goes away mid-write', async (t) => {
+  const probeDir = H.tmpdir('pipe');
+  const probe = path.join(probeDir, 'probe.py');
+  // Import the REAL ble.py and hammer emit() until the reader vanishes.
+  fs.writeFileSync(probe, [
+    'import importlib.util, sys, time',
+    'spec = importlib.util.spec_from_file_location("ble", sys.argv[1])',
+    'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+    'for i in range(100000):',
+    '    m.emit(t="frame", uuid="0000ffb2-0000-1000-8000-00805f9b34fb", hex="aa" * 20, n=i)',
+    '    time.sleep(0.0005)',
+    'm.emit(t="end", reason="finished")',
+    '',
+  ].join('\n'));
+
+  const python = fs.existsSync(path.join(H.ROOT, 'blehost'))
+    ? path.join(H.ROOT, 'blehost') : 'python3';
+
+  const result = await new Promise((resolve) => {
+    const child = spawn(python, [probe, path.join(H.ROOT, 'ble.py')],
+                        { stdio: ['ignore', 'pipe', 'pipe'], cwd: H.ROOT });
+    let lines = 0;
+    let stderr = '';
+    child.stdout.on('data', (d) => { lines += (d.toString().match(/\n/g) || []).length; });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    // Let it stream first, so the close genuinely lands mid-write rather than
+    // before the process has produced anything.
+    const pull = setTimeout(() => child.stdout.destroy(), 500);
+    const bail = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) { /* gone */ } }, 15000);
+    child.on('close', (code, signal) => {
+      clearTimeout(pull); clearTimeout(bail);
+      resolve({ lines, stderr, code, signal });
+    });
+  });
+
+  assert.ok(result.lines > 10,
+    `it was genuinely mid-stream when the reader left, saw ${result.lines} lines`);
+  assert.doesNotMatch(result.stderr, /Traceback/,
+    `no traceback reached the terminal, got: ${result.stderr.slice(0, 400)}`);
+  assert.doesNotMatch(result.stderr, /BrokenPipeError/, 'and no BrokenPipeError');
+  assert.doesNotMatch(result.stderr, /Exception ignored/,
+    'including the one the interpreter raises during its own exit flush');
+  assert.strictEqual(result.signal, null, 'it exited on its own rather than being killed');
+  assert.strictEqual(result.code, 0, 'a reader that goes away is a normal end, so exit 0');
+});

@@ -388,15 +388,34 @@ group more quietly than the first.
 
 ### `derived` has two shapes, and both are normal
 
-| Impedance | `measured.impedanceOhm` | `derived` keys | `trust.impedanceDerived` |
-|---|---|---|---|
-| present, and it passed the checks | a number | **24** | `true` |
-| present, but it failed the checks | the rejected number | **24** | `false` |
-| absent | `null` | **9** | `false` |
+| Case | `measured.impedanceOhm` | `derived` keys | `impedanceFree` | `impedanceDerived` |
+|---|---|---|---|---|
+| A person, impedance passed | a number | **24** | `true` | `true` |
+| A person, impedance failed | the rejected number | **24** | `true` | `false` |
+| A person, no impedance | `null` | **9** | `true` | `false` |
+| **Not a person on the scale** | anything | **0** | `false` | `false` |
 
-**The key count and the trust flag are independent signals. Do not infer one
+That last row is not hypothetical. A real session produced `18.45 kg` with
+`1313.4 Ω` — a bag, a pet, or someone stepping off mid-reading. Rule T1 fired,
+and `derived`, `units`, `confidence` and `omitted` all came back as **empty
+objects**, with `bodyFatRecommended` and `crossCheck` `null`.
+
+**`trust.impedanceFree` is the guard for this shape.** When it is `false`, not
+even weight-only figures like BMI and BMR exist, because the weight itself is
+not a person's. Check it before reading anything at all:
+
+```js
+if (!m.trust.impedanceFree) {
+  // Nothing was computed. m.flags explains why, in a sentence you can show.
+  show(m.flags[0].message);            // "Weight is 18.45 kg, too low to be…"
+  return;
+}
+```
+
+**The key count and the trust flags are independent signals. Do not infer one
 from the other.** A rejected impedance still produces all twenty-four values —
-they are simply not to be believed. Only a *missing* impedance shrinks the set.
+they are simply not to be believed. A *missing* impedance shrinks the set to
+nine. And a weight that is not a person's produces **none at all**.
 
 A host that treats "few keys" as "untrustworthy" will display a rejected body
 fat of 62.3% as though it were a measurement. Branch on `trust.impedanceDerived`

@@ -639,3 +639,53 @@ test('INT-TRUST-24  key count signals presence, trust signals believability, and
   assert.notStrictEqual(rejected.trusted, good.trusted,
     'trust is the only signal that separates them');
 });
+
+// Prevents: the crash a host takes on `result.derived.bmi` when the scale
+// reports a weight that is not a person's — a bag set down, a pet, someone
+// stepping off mid-reading. A real session produced 18.45 kg with 1313.4 ohm,
+// and `derived`, `units`, `confidence` and `omitted` all came back EMPTY. This
+// is the only shape where even BMI is absent, and `trust.impedanceFree` is the
+// only signal that says so before a key lookup throws.
+test('INT-TRUST-25  a weight that is not a person produces no derived values at all', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+
+  for (const [weight, what] of [[18.45, 'the weight the real scale reported'],
+                                [10, 'an object'],
+                                [0, 'an empty scale']]) {
+    const r = BIA.estimate({ weightKg: weight, impedanceOhm: 1313.4, heightCm: 180, age: 39, sex: 'male' });
+    const keys = Object.keys(r.values)
+      .filter((k) => k !== 'weightKg' && k !== 'impedanceOhm' && typeof r.values[k] !== 'object');
+
+    assert.strictEqual(keys.length, 0, `${what}: nothing is computed`);
+    assert.strictEqual(r.trust.impedanceFree, false,
+      `${what}: even the impedance-free figures are withheld, because the weight is not a person's`);
+    assert.strictEqual(r.trust.impedanceDerived, false);
+    assert.ok(r.flags.some((f) => f.rule === 'T1' && f.severity === 'fatal'),
+      `${what}: T1 says why`);
+    assert.ok(r.flags[0].message.length > 20,
+      'and says it in a sentence a host can show the user verbatim');
+  }
+});
+
+// Prevents: a host reading `derived.bmi` on the empty shape. The four shapes
+// this payload can take are the whole contract for defensive rendering.
+test('INT-TRUST-26  the four payload shapes are distinguishable before any key lookup', async () => {
+  const BIA = require(require('path').join(H.ROOT, 'bia.js'));
+  const shape = (w, z) => {
+    const r = BIA.estimate({ weightKg: w, impedanceOhm: z, heightCm: 180, age: 39, sex: 'male' });
+    const n = Object.keys(r.values)
+      .filter((k) => k !== 'weightKg' && k !== 'impedanceOhm' && typeof r.values[k] !== 'object').length;
+    return { n, free: r.trust.impedanceFree, derived: r.trust.impedanceDerived };
+  };
+
+  assert.deepStrictEqual(shape(75, 520),     { n: 24, free: true,  derived: true  }, 'person, good impedance');
+  assert.deepStrictEqual(shape(75, 3115.6),  { n: 24, free: true,  derived: false }, 'person, rejected impedance');
+  assert.deepStrictEqual(shape(75, 0),       { n: 9,  free: true,  derived: false }, 'person, no impedance');
+  assert.deepStrictEqual(shape(18.45, 1313.4), { n: 0, free: false, derived: false }, 'not a person');
+
+  // The two flags together identify the shape without touching `derived`.
+  // free=false  -> nothing at all
+  // free=true, derived=false, and a key check for presence -> 9 or 24
+  assert.notStrictEqual(shape(75, 0).n, shape(18.45, 1313.4).n,
+    'a missing impedance and a non-person are different outcomes and must not be conflated');
+});
