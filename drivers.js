@@ -95,64 +95,90 @@
     checksumOk(b) {
       return b.length >= 5 && drTrust.checksum(b) === b[b.length - 1];
     },
-    /* Build a 20-byte command packet (SSW532 handshake; optional on the SSW533). */
-    packet(bytes) {
-      const p = new Uint8Array(20);
-      p.set(bytes.slice(0, 19));
-      let s = 0;
-      for (let i = 3; i <= 18; i++) s += p[i];
-      p[19] = s % 32;
+    /*
+     * Build a command frame.
+     *
+     *     [0] package index   [1..2] payload length, big-endian
+     *     [3] fragment index  [4..]  payload, first byte is the command
+     *     [last] trailer = (unit << 5) | (sum(payload) & 0x1F)
+     *
+     * The header is FOUR bytes, not three. This is the single fault that made
+     * every earlier fix pointless: with a three-byte header the command byte
+     * lands at index 3, where the scale expects the fragment index, and it
+     * reads our profile as length 0x1A00 with fragment 0xB8. Malformed, so
+     * discarded before it is ever dispatched. Nothing we sent — the session
+     * acknowledgement, the weight, the impedance request — was ever parsed.
+     *
+     * The same grammar reads every frame the scale sends us, which is how it
+     * was confirmed: `06 00 23 00 a7 ...` is package 6, length 35, fragment 0,
+     * command 0xA7. The "frame type 0x23" this driver used to search for was
+     * that length byte, and the "subtypes" were fragment indices.
+     *
+     * The trailer covers the payload only. Summing from index 3, as before,
+     * wrongly included the fragment byte and agreed with the real rule only
+     * because that byte is zero in every single-fragment message.
+     */
+    packet(payload, pkgIndex = 0, fragIndex = 0, unit = 0) {
+      const body = Array.from(payload);
+      const p = new Uint8Array(4 + body.length + 1);
+      p[0] = pkgIndex & 0xff;
+      p[1] = (body.length >> 8) & 0xff;
+      p[2] = body.length & 0xff;
+      p[3] = fragIndex & 0xff;
+      p.set(body, 4);
+      let sum = 0;
+      for (const b of body) sum += b;
+      p[p.length - 1] = ((unit & 0x07) << 5) | (sum & 0x1f);
       return p;
+    },
+
+    /* The scale de-duplicates on the package index, so it must advance. */
+    nextPkg(st) {
+      st.pkg = ((st.pkg || 0) + 1) & 0xff;
+      return st.pkg;
     },
 
     async init(ctx) {
       ctx.state.drt = {
         session: null, weightKg: 0, impedanceOhm: null, live: false,
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
-        profileSent: false, biaRequested: false, weightDeclared: false,
-        handshakeDone: false, lastLiveKg: 0, writeChain: null,
+        profileSent: false, weightDeclared: false,
+        handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0,
       };
       /*
-       * The record channel first, and ONLY that.
+       * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
        *
-       * The vendor app subscribes to 0xFFB3, waits for the scale to announce
-       * its session, and only then turns on the weight stream. Turning both on
-       * at once — and worse, turning on every notify characteristic the device
-       * exposes, including its Nordic DFU channel — is not what the scale sees
-       * from the app it was built for, and this firmware only runs its full
-       * impedance program for a client that behaves like one.
+       * This driver used to wait for an inbound "session frame" before sending
+       * anything, and read a "session id" out of it. Neither exists. That byte
+       * was the package index, and the frame was the device-info report. The
+       * app simply enables both notifications and writes the profile; there is
+       * no step where the scale asks to be introduced.
        */
-      ctx.log('Dr Trust driver: subscribing to the record channel 0xFFB3 and waiting for the session.', 'ok');
+      ctx.log('Dr Trust driver: subscribing to the record channel 0xFFB3.', 'ok');
       const a = await ctx.subscribe(0xffb0, 0xffb3);
-      if (!a) ctx.log('Could not subscribe to the record channel. Tap the scale to wake it and reconnect.', 'err');
-      else ctx.log('Ready. Step on the scale.', 'ok');
+      if (!a) {
+        ctx.log('Could not subscribe to the record channel. Tap the scale to wake it and reconnect.', 'err');
+        return;
+      }
+      await ctx.subscribe(0xffb0, 0xffb2);
+      ctx.log('  Dr Trust: declaring the user and requesting impedance.', 'ok');
+      await drTrust.writeProfile(ctx).catch((e) =>
+        ctx.log(`  Dr Trust: could not declare the user: ${e.message}`, 'warn'));
+      ctx.log('Ready. Step on the scale.', 'ok');
     },
-
-    /*
-     * The wire grammar for 0xFFB1, which our three packets already followed
-     * without naming it:
-     *
-     *     [0] seq   [1] len   [2] fragment   [3] type   [4..18] payload   [19] checksum
-     *
-     * The "app name" packet is not a third message; it is fragment 1 of the
-     * 26-byte message the profile starts. Hence the shared seq and len.
-     */
 
     /*
      * Profile writes are queued, never concurrent.
      *
      * These are started from inside frame decoding and deliberately not
      * awaited, so the weight stream cannot stall behind a slow write. That
-     * means two can be in flight at once — the opening handshake and a weight
-     * correction moments later — and their 20-byte writes interleave. The
-     * order they arrive in decides what the scale believes, so a stale 60 kg
+     * means two can be in flight at once — the opening declaration and a
+     * weight correction moments later — and their writes interleave. The
+     * order they arrive in decides what the scale believes, so a stale
      * declaration can land after the real one and quietly undo it.
-     *
-     * Chaining them costs nothing and makes the last write the last word.
      */
     async sendProfile(ctx, weightKg) {
       const st = ctx.state.drt;
-      if (st.session === null) return;
       const prior = st.writeChain || Promise.resolve();
       let release;
       st.writeChain = new Promise((r) => { release = r; });
@@ -162,84 +188,81 @@
       } finally { release(); }
     },
 
+    /*
+     * Declare the user to the scale.
+     *
+     * Command 0xBE, 23 payload bytes:
+     *
+     *   [0]      0xBE
+     *   [1..4]   unix time, big-endian
+     *   [5..6]   UTC offset in MINUTES, signed big-endian
+     *   [7]      user index
+     *   [8]      height in cm
+     *   [9..10]  weight x100, big-endian (bit 15 = athlete mode)
+     *   [11]     age, with 0x80 set for male
+     *   [12..13] target weight x100, big-endian
+     *   [14..15] start weight x100, big-endian
+     *   [16]     function bitmask
+     *   [17..20] user id, big-endian
+     *   [21..22] head index and sequence
+     *
+     * Byte 16 is the one that matters. Bit 0 is fun_open_imp — the request for
+     * an impedance measurement — and it is the only field in this protocol
+     * that asks the scale to run its sweep. There is no start command; the
+     * scale runs it when a well-formed profile arrives with that bit set, and
+     * announces it in the state byte of the weight stream.
+     *
+     * The old packet used command 0xB8 at the wrong offset with a three-byte
+     * header, a hardcoded +05:30 UTC offset, a 348.31 kg target weight, and a
+     * second fragment carrying ASCII "icomon" — which was never an app name,
+     * but the nickname field of a different command's payload.
+     */
     async writeProfile(ctx, weightKg) {
       const st = ctx.state.drt;
-      const prof = ctx.profile();
+      const prof = ctx.profile() || {};
       const ts = Math.floor(ctx.now() / 1000);
       const h = Math.min(220, Math.max(100, Math.round(prof.heightCm || 170)));
       const age = Math.min(127, Math.max(0, Math.round(prof.age || 30)));
+      const male = String(prof.sex || 'male').toLowerCase() !== 'female';
 
-      /*
-       * Two fields here were carried over from openScale as constants. They
-       * are not constants; they are user data, and we were sending the wrong
-       * values for every person who used this.
-       *
-       * The declared weight, 0x1770, is 6000 = 60.00 kg. It reached us as a
-       * literal in a handler someone wrote from a capture of a 60 kg user. The
-       * firmware feeds the declared weight into the current it drives through
-       * the body, so declaring 60.00 for a 96 kg person is a plausible reason
-       * for it to decline the sweep rather than run it badly.
-       *
-       * Byte 14 is masked 0x80|age, described upstream as age with a constant
-       * high bit, alongside a comment that this protocol does not carry sex.
-       * It carries sex: that bit is the flag. Sending 0x80 unconditionally
-       * declares every user male.
-       */
       const declaredKg = Math.min(300, Math.max(10, weightKg || prof.weightKg || 60));
       const dw = Math.round(declaredKg * 100);
-      const male = String(prof.sex || 'male').toLowerCase() !== 'female';
-      const sexAge = (male ? 0x80 : 0x00) | age;
+      // Taken from the host clock rather than hardcoded: the old +05:30 was
+      // only ever right in India.
+      const tzMin = -new Date().getTimezoneOffset();
+      const FUN_IMPEDANCE = 0x01;                 // the bit this all turns on
+      const FUN_BALANCE = 0x02, FUN_HR = 0x04, FUN_GRAVITY = 0x08;
+      const flags = FUN_IMPEDANCE | FUN_BALANCE | FUN_HR | FUN_GRAVITY;
 
-      const packets = [
-        [drTrust.packet([0x00, 0x03, 0x00, 0xb0, st.session]), 'session ack'],
-        [drTrust.packet([0x01, 0x1a, 0x00, 0xb8, (ts >>> 24) & 0xff, (ts >>> 16) & 0xff, (ts >>> 8) & 0xff, ts & 0xff,
-          0x01, 0x4a, 0x01, h, (dw >> 8) & 0xff, dw & 0xff, sexAge, 0x13, 0x88, 0x0f, 0x00]),
-          `user profile (${h} cm, ${age}y, ${male ? 'male' : 'female'}, declared ${declaredKg} kg)`],
-        [drTrust.packet([0x01, 0x1a, 0x01, 0x00, 0x00, 0x00, 0x06, 0x69, 0x63, 0x6f, 0x6d, 0x6f, 0x6e,
-          0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), 'app name'],
+      const be16 = (v) => [(v >> 8) & 0xff, v & 0xff];
+      const be32 = (v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+      const payload = [
+        0xbe, ...be32(ts), ...be16(tzMin & 0xffff), 0x01, h,
+        ...be16(dw), (male ? 0x80 : 0x00) | age,
+        ...be16(dw), ...be16(dw), flags, ...be32(1), 0x00, 0x00,
       ];
-      /*
-       * A re-declaration is one packet, not three.
-       *
-       * The first send is the handshake: acknowledge the session, declare the
-       * user, name ourselves. Later sends exist only to correct the declared
-       * weight, and re-acknowledging a session that is already open — three
-       * times in one weigh-in, as the logs showed — is not something the app
-       * this firmware expects ever does.
-       */
-      const toSend = st.handshakeDone ? packets.slice(1, 2) : packets;
+
+      const what = `user profile (${h} cm, ${age}y, ${male ? 'male' : 'female'},`
+        + ` declared ${declaredKg} kg, impedance requested)`;
       st.handshakeDone = true;
-      for (const [p, what] of toSend) await ctx.write(0xffb0, 0xffb1, p, what);
+      await ctx.write(0xffb0, 0xffb1,
+        drTrust.packet(payload, drTrust.nextPkg(st)), what);
     },
 
     /*
-     * Ask the scale to run its impedance program.
+     * Acknowledge a frame from the scale.
      *
-     * This is the packet we were never sending, and its absence explains every
-     * symptom at once: the weight arrives because the weight stream needs no
-     * permission, the display never shows P-1 because nothing ever asked for
-     * P-1, and no 0x01 record frame arrives because none was ever measured. We
-     * spent a long time looking for a decode fault in data the scale had no
-     * reason to produce.
-     *
-     *     [seq=2] [len=2] [frag=0] [type=0xBD] [0x09] ... [checksum]
-     *
-     * 0xBD is the vendor's general command channel and 0x09 is the start
-     * subcommand. It goes after the profile and after the weight has settled,
-     * which is the same order the phone app uses — the firmware wants to know
-     * who is standing on it, and how heavy they are, before it drives current.
+     * The SDK replies 0xB0 to the device-info frame and to every record, and
+     * drops the connection when the acknowledgement does not come. The payload
+     * echoes the package index of the frame being answered.
      */
-    async startBia(ctx, weightKg) {
+    async ack(ctx, forPkg) {
       const st = ctx.state.drt;
-      if (st.session === null || st.biaRequested) return;
-      st.biaRequested = true;
-      // Re-declare the profile now that the real weight is known: at session
-      // time we had no weight at all and had to send a guess.
-      await drTrust.sendProfile(ctx, weightKg);
-      const p = drTrust.packet([0x02, 0x02, 0x00, 0xbd, 0x09]);
-      ctx.log('  Dr Trust: asking the scale to start its impedance program (0xBD 0x09).', 'info');
-      await ctx.write(0xffb0, 0xffb1, p, 'start impedance (BD 09)');
+      await ctx.write(0xffb0, 0xffb1,
+        drTrust.packet([0xb0, forPkg & 0xff, 0x00], drTrust.nextPkg(st)),
+        `ack of package 0x${(forPkg & 0xff).toString(16)}`);
     },
+
 
     /* Locate a frame marker. Firmware revisions differ by a leading header byte:
        the SSW532 puts the marker at index 1, the SSW533 at index 2. */
@@ -279,7 +302,6 @@
           st.onScale = false;
           if (st.finalReported) {
             st.finalReported = false; st.finalKg = null; st.impedanceOhm = null;
-            st.biaRequested = false;          // a new step-on may ask again
             st.weightDeclared = false;        // and re-declares its own weight
             st.handshakeDone = false; st.lastLiveKg = 0;
           }
@@ -326,10 +348,16 @@
           st.weightKg = kg;
           if (state === 'final') {
             st.finalKg = kg; st.finalReported = true;
-            // Not awaited: this runs inside frame decoding and must not stall
-            // the stream. The transport reports write failures on its own.
-            Promise.resolve(drTrust.startBia(ctx, kg))
-              .catch((e) => ctx.log(`  Dr Trust: could not start impedance: ${e.message}`, 'warn'));
+            /*
+             * Nothing is sent here any more.
+             *
+             * This used to write 0xBD 0x09 as an "start the impedance program"
+             * request. There is no such command: 0xBD is the SDK's generic
+             * vendor pass-through, reachable only from an explicit settings
+             * action, and the app never sends it during a measurement. The
+             * scale decides for itself, once a well-formed profile has asked
+             * for impedance, and reports it in the weight stream's state byte.
+             */
           }
         }
 

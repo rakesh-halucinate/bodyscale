@@ -64,17 +64,21 @@ const REAL = {
   recordMid: '04 00 23 00 a7 00 00 0b ef 25 01 6b ac 00 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08',
   setup:     '03 00 1d 00 aa 33 71 1e 1a 64 25 01 0a 00 00 00 00 00 00 00 00 00 00 00 00 00 44 00 00 00 00 00 00 1e',
   /*
-   * Frame type 0x23 has subtypes. 0x00 carries weight and a timestamp; 0x01
-   * carries the impedances, as three little-endian uint16 in tenths of an ohm —
-   * trunk, right leg, left leg — whose sum is the whole-body figure.
+   * There are no impedance frames here.
    *
-   * The `record` frames above are subtype 0x00, and their bytes [7][8] are the
-   * low half of that timestamp. Reading them as a big-endian impedance is what
-   * this driver did for a long time, and it is why one recording appeared to
-   * carry a perfectly plausible 529.9 ohm that was really a clock.
+   * Two used to be, named REAL.impedance and REAL.impedanceMid and described
+   * as hardware captures. They were not. Under this protocol's actual grammar
+   * — [package][length BE16][fragment][command] — both are malformed: they
+   * declare fragment 1 while repeating a command byte that only a fragment 0
+   * carries. They were constructed to fit a misreading of the format, and then
+   * used as the evidence for "three little-endian uint16, trunk / right leg /
+   * left leg", which is also wrong.
+   *
+   * The one genuine record capture we have, REAL.record, says the scale
+   * returned N=10 impedance slots and left every one of them zero. Until a
+   * real non-zero record exists, there is nothing here to decode against, and
+   * inventing one to make a test pass is what produced this mess.
    */
-  impedance:    '07 00 23 01 a7 00 00 04 04 05 04 05 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
-  impedanceMid: '05 00 23 01 a7 00 00 f8 03 f9 03 f9 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1b',
 };
 const feed = async (hexes) => {
   const ctx = makeCtx();
@@ -148,14 +152,7 @@ test('the real record frame yields 98.50 kg and no impedance', async () => {
   assert.equal(r.values.subtype, 0x00);
 });
 
-test('the impedance frame yields 308.6 ohm as three segments', async () => {
-  const { out } = await feed([REAL.impedance]);
-  const r = out[0];
-  assert.equal(r.values.subtype, 0x01);
-  assert.equal(r.values.impedanceOhm, 308.6, 'trunk plus right leg plus left leg');
-  assert.equal(r.values.weight, undefined, 'and no weight: those bytes are impedance here');
-  assert.equal(r.fields.find((f) => f.name === 'Impedance').unit, 'Ω');
-});
+
 
 test('the mid-measurement record frame decodes its own weight', async () => {
   const { out } = await feed([REAL.recordMid]);
@@ -163,33 +160,11 @@ test('the mid-measurement record frame decodes its own weight', async () => {
   assert.equal(out[0].values.impedanceOhm, null, 'a weight frame never carries one');
 });
 
-test('the mid-measurement impedance frame decodes its own segments', async () => {
-  const { out } = await feed([REAL.impedanceMid]);
-  assert.equal(out[0].values.impedanceOhm, 305, 'trunk plus both legs');
-});
 
-test('a record frame carrying impedance drives derived body composition', async () => {
-  // The impedance arrives on its own frame; body composition appears once the
-  // driver has both that and a weight.
-  const { out } = await feed([REAL.record, REAL.impedance]);
-  const r = out[out.length - 1];
-  assert.ok(r.values.bodyFatPercent !== undefined, 'body composition is derived');
-  assert.ok(r.values.bodyFatPercentBmiAnchor !== undefined, 'the impedance-free body fat anchor is included');
-  assert.ok(r.warnings.some((w) => /did not survive their range checks/.test(w)),
-    'and this reading is flagged, because 308.6 ohm is a bad-contact foot-to-foot value');
-  assert.ok(r.fields.some((f) => /DERIVED/.test(f.note || '')));
-  assert.ok(r.warnings.some((w) => /estimated from them/.test(w)));
-});
 
-test('the real setup frame is recognised and yields a session id', async () => {
-  const { ctx, out } = await feed([REAL.setup]);
-  assert.ok(out[0], 'the 0x1D setup frame must be recognised');
-  // Byte 0, the frame's sequence number — not byte 1, which is padding. The
-  // real frame here is `03 00 1d 00 aa ...`, so the id the scale wants echoed
-  // is 0x03. This previously asserted 0x00, which was the bug, not the spec.
-  assert.equal(ctx.state.drt.session, 0x03);
-  assert.match(out[0].characteristic, /session setup/i);
-});
+
+
+
 
 test('SSW532 (openScale offset-1) frames still decode alongside the SSW533', async () => {
   // marker 0x07 at index 1, 0xA2 at index 3, stability 0x03, weight BE24 at 6
@@ -265,23 +240,9 @@ test('fat-free mass never uses the reactance-dependent equation this scale canno
   assert.ok(BIA.OMITTED.fatFreeMassKyle2001);
 });
 
-test('impedance from the record frame is carried onto the later final-weight panel', async () => {
-  const { out } = await feed([REAL.record, REAL.impedance, REAL.finalW]);
-  const final = out[out.length - 1];
-  assert.equal(final.values.weight, 98.5);
-  assert.equal(final.values.impedanceOhm, 308.6, 'the final view must not lose the impedance');
-  assert.ok(final.fields.some((f) => f.name === 'Impedance' && f.value === 308.6));
-});
 
-test('the full real weigh-in sequence ends on 98.50 kg with 308.6 ohm', async () => {
-  const { out } = await feed([REAL.setup, REAL.idle, REAL.stepOn, REAL.rising, REAL.overshoot,
-    REAL.recordMid, REAL.record, REAL.impedance, REAL.finalW]);
-  const final = out[out.length - 1];
-  assert.equal(final.values.weight, 98.5);
-  assert.equal(final.values.impedanceOhm, 308.6);
-  assert.equal(final.values.state, 'final');
-  assert.equal(out.filter((r) => r && r.values && r.values.state === 'idle').length, 1);
-});
+
+
 
 /*
  * The impedance program has to be asked for.
@@ -290,113 +251,135 @@ test('the full real weigh-in sequence ends on 98.50 kg with 308.6 ohm', async ()
  * because the scale was never told to measure any. These lock the request and
  * the two profile fields that were being sent as constants.
  */
-test('Dr Trust: the weight locking asks the scale to start its impedance program', async () => {
-  const writes = [];
-  const ctx = {
-    state: { drt: { session: 0x2a, biaRequested: false } },
-    profile: () => ({ heightCm: 180, age: 39, sex: 'male' }),
-    now: () => 1757072503000,
-    log: () => {},
-    write: async (svc, chr, bytes, what) => { writes.push({ chr, bytes: [...bytes], what }); return true; },
-  };
 
-  await D.drTrust.startBia(ctx, 96.4);
 
-  const start = writes.find((w) => /BD 09/i.test(w.what));
-  assert.ok(start, `no start command was sent; wrote [${writes.map((w) => w.what).join(', ')}]`);
-  assert.strictEqual(start.chr, 0xffb1, 'the command channel, not the notify one');
-  assert.deepStrictEqual(start.bytes.slice(0, 5), [0x02, 0x02, 0x00, 0xbd, 0x09],
-    'seq 2, length 2, fragment 0, type 0xBD, subcommand 0x09');
-  assert.strictEqual(start.bytes.length, 20);
-  // sum(bytes[3..18]) mod 32 = (0xBD + 0x09) mod 32 = 198 mod 32 = 6.
-  assert.strictEqual(start.bytes[19], 0x06, 'checksum over bytes 3..18, mod 32');
 
-  // It is asked for once per step-on, not once per settled frame.
-  const before = writes.length;
-  await D.drTrust.startBia(ctx, 96.4);
-  assert.strictEqual(writes.length, before, 'a second call must not re-ask');
-});
 
-test('Dr Trust: the profile declares the real weight and the real sex', async () => {
-  const run = async (sex, kg) => {
-    const writes = [];
-    const ctx = {
-      state: { drt: { session: 0x2a } },
-      profile: () => ({ heightCm: 180, age: 39, sex }),
-      now: () => 1757072503000,
-      log: () => {},
-      write: async (s2, c, bytes, what) => { writes.push({ bytes: [...bytes], what }); return true; },
-    };
-    await D.drTrust.sendProfile(ctx, kg);
-    return writes.find((w) => /user profile/.test(w.what));
-  };
 
-  const male = await run('male', 96.4);
-  // Declared weight is a big-endian hundredth-kilo field at bytes 12 and 13.
-  assert.strictEqual((male.bytes[12] << 8) | male.bytes[13], 9640,
-    'the person on the scale weighs 96.4 kg, not openScale\'s hardcoded 60.00');
-  assert.strictEqual(male.bytes[14], 0x80 | 39, 'sex bit set for male, age in the low bits');
-  assert.strictEqual(male.bytes[11], 180, 'height in cm');
-
-  const female = await run('female', 61.5);
-  assert.strictEqual((female.bytes[12] << 8) | female.bytes[13], 6150);
-  assert.strictEqual(female.bytes[14], 39, 'sex bit clear for female');
-
-  // Absent a weight we still have to send something, but it must stay in range.
-  const unknown = await run('male', undefined);
-  const declared = (unknown.bytes[12] << 8) | unknown.bytes[13];
-  assert.ok(declared >= 1000 && declared <= 30000, `declared ${declared} out of range`);
-});
-
-test('the session acknowledgement echoes the id the scale actually asked for', async () => {
-  const { ctx } = await feed([REAL.setup]);
-  await new Promise((r) => setTimeout(r, 20));           // the writes are not awaited
-  const ack = ctx.calls.writes.find((w) => /session ack/.test(w.what));
-  assert.ok(ack, 'a session ack must be written');
-  const bytes = ack.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
-  // Packet is [seq][len][frag][type 0xB0][session id]; the real frame's id is 0x03.
-  assert.strictEqual(bytes[3], 0xb0, 'the session-ack command type');
-  assert.strictEqual(bytes[4], 0x03,
-    'the id must be the scale\'s own byte 0, not the always-zero byte 1');
-});
 
 /*
  * The scale sets its measuring current from the weight it has been told, and
  * decides early. Declaring a stand-in until the weight locks means it decides
  * on a number that is wrong by tens of kilos.
  */
-test('a settled live weight is declared, and a footfall is not', async () => {
-  // One rising frame is someone mid-step. Two that agree is their weight.
-  const { ctx } = await feed([REAL.setup, REAL.rising, REAL.rising]);
-  await new Promise((r) => setTimeout(r, 20));
 
-  const profiles = ctx.calls.writes.filter((w) => /user profile/.test(w.what));
-  assert.ok(profiles.length >= 2,
-    `expected a re-declare after the weight steadied, saw ${profiles.length}`);
+// ===========================================================================
+// The wire format, as the scale actually speaks it.
+//
+//     [0] package index   [1..2] payload length, big-endian
+//     [3] fragment index  [4..]  payload, whose first byte is the command
+//     [last] trailer = (unit << 5) | (sum(payload) & 0x1F)
+//
+// Confirmed against every genuine frame we hold. The driver previously used a
+// three-byte header, which put the command where the fragment index belongs
+// and made every packet it ever sent unparseable.
+// ===========================================================================
 
-  const last = profiles[profiles.length - 1];
-  const bytes = last.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
-  assert.strictEqual(((bytes[12] << 8) | bytes[13]) / 100, 70.45);
+test('every real frame from the scale parses under the four-byte header', () => {
+  const cases = [
+    [REAL.setup, 0x03, 29, 0xaa], [REAL.idle, 0x17, 7, 0xa2],
+    [REAL.stepOn, 0x20, 7, 0xa2], [REAL.rising, 0x2f, 7, 0xa2],
+    [REAL.finalW, 0x76, 7, 0xa2], [REAL.record, 0x06, 35, 0xa7],
+  ];
+  for (const [hex, pkg, len, cmd] of cases) {
+    const b = BCS.hexToBytes(hex);
+    assert.strictEqual(b[0], pkg, `${hex.slice(0, 11)}: package index`);
+    assert.strictEqual((b[1] << 8) | b[2], len, `${hex.slice(0, 11)}: payload length`);
+    assert.strictEqual(b[3], 0x00, `${hex.slice(0, 11)}: fragment index`);
+    assert.strictEqual(b[4], cmd, `${hex.slice(0, 11)}: command`);
+  }
+});
 
-  // The opening declaration is still a placeholder: nobody is on the scale
-  // when the session opens.
-  const first = profiles[0].hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
-  assert.strictEqual(((first[12] << 8) | first[13]) / 100, 60);
+test('a built frame carries its command at index 4, not index 3', () => {
+  const p = D.drTrust.packet([0xb0, 0x03, 0x00], 0);
+  assert.deepStrictEqual([...p], [0x00, 0x00, 0x03, 0x00, 0xb0, 0x03, 0x00, 0x13]);
+  // The trailer covers the payload only: (0xB0 + 3 + 0) & 0x1F = 0x13.
+  assert.strictEqual(p[p.length - 1], 0x13);
+});
 
-  // A single ramping reading must NOT be declared. 10.45 kg went to the scale
-  // as a 93.4 kg person's weight before this rule existed.
-  const { ctx: solo } = await feed([REAL.setup, REAL.stepOn]);
-  await new Promise((r) => setTimeout(r, 20));
-  assert.strictEqual(solo.calls.writes.filter((w) => /user profile/.test(w.what)).length, 1,
-    'one mid-step reading is not a weight');
+test('the package index advances, because the scale de-duplicates on it', () => {
+  const st = { pkg: 0 };
+  assert.strictEqual(D.drTrust.nextPkg(st), 1);
+  assert.strictEqual(D.drTrust.nextPkg(st), 2);
+  st.pkg = 0xff;
+  assert.strictEqual(D.drTrust.nextPkg(st), 0, 'and wraps rather than overflowing the byte');
+});
 
-  // And the correction happens once, however long the stream runs.
-  const { ctx: many } = await feed([REAL.setup, REAL.rising, REAL.rising, REAL.rising, REAL.overshoot]);
-  await new Promise((r) => setTimeout(r, 20));
-  assert.strictEqual(many.calls.writes.filter((w) => /user profile/.test(w.what)).length, 2);
+test('the profile asks for impedance, which is the only way to ask', async () => {
+  const writes = [];
+  const ctx = {
+    state: { drt: { pkg: 0 } },
+    profile: () => ({ heightCm: 180, age: 39, sex: 'male' }),
+    now: () => 1757155200000, log: () => {},
+    write: async (s2, c, b, what) => { writes.push({ c, b: [...b], what }); return true; },
+  };
+  await D.drTrust.writeProfile(ctx, 98.5);
 
-  // The re-declare is one packet: the session is not acknowledged twice.
-  assert.strictEqual(many.calls.writes.filter((w) => /session ack/.test(w.what)).length, 1,
-    'a session that is already open must not be re-acknowledged');
-  assert.strictEqual(many.calls.writes.filter((w) => /app name/.test(w.what)).length, 1);
+  assert.strictEqual(writes.length, 1, 'one frame, not three: there is no separate ack or app name');
+  const { c, b, what } = writes[0];
+  assert.strictEqual(c, 0xffb1);
+  assert.strictEqual((b[1] << 8) | b[2], 23, 'the 0xBE payload is 23 bytes');
+  assert.strictEqual(b[4], 0xbe, 'command 0xBE, the user-info frame this scale takes');
+  assert.strictEqual(b[12], 180, 'height');
+  assert.strictEqual((b[13] << 8) | b[14], 9850, 'weight x100, big-endian');
+  assert.strictEqual(b[15], 0x80 | 39, 'sex bit and age');
+  // Byte 16 of the payload — frame index 20 — is the function bitmask, and its
+  // bit 0 is fun_open_imp. Everything else in this file is downstream of it.
+  assert.strictEqual(b[20] & 0x01, 0x01, 'bit 0 requests the impedance sweep');
+  assert.match(what, /impedance requested/);
+
+  const sum = b.slice(4, -1).reduce((a, x) => a + x, 0);
+  assert.strictEqual(b[b.length - 1] & 0x1f, sum & 0x1f, 'trailer checks over the payload');
+});
+
+test('a female profile clears the sex bit rather than always claiming male', async () => {
+  const writes = [];
+  const ctx = {
+    state: { drt: { pkg: 0 } },
+    profile: () => ({ heightCm: 165, age: 34, sex: 'female' }),
+    now: () => 1757155200000, log: () => {},
+    write: async (s2, c, b) => { writes.push([...b]); return true; },
+  };
+  await D.drTrust.writeProfile(ctx, 61.5);
+  assert.strictEqual(writes[0][15], 34, 'age with the male bit clear');
+  assert.strictEqual((writes[0][13] << 8) | writes[0][14], 6150);
+});
+
+test('the scale is acknowledged with the package index it used', async () => {
+  const writes = [];
+  const ctx = { state: { drt: { pkg: 5 } }, log: () => {},
+    write: async (s2, c, b, what) => { writes.push({ b: [...b], what }); return true; } };
+  await D.drTrust.ack(ctx, 0x2e);
+  const { b, what } = writes[0];
+  assert.strictEqual(b[0], 6, 'our own index, advanced');
+  assert.strictEqual(b[4], 0xb0, 'reply command');
+  assert.strictEqual(b[5], 0x2e, 'echoing the package index being answered');
+  assert.strictEqual(b[6], 0x00, 'state 0 = success');
+  assert.match(what, /ack of package 0x2e/);
+});
+
+/*
+ * The weight stream announces the impedance phase; nothing requests it.
+ * State 1 is plain weighing, 2 and 3 are the ADC sweep — the P-1 display.
+ * In every capture we hold, it never leaves 1.
+ */
+test('the live frame state byte is where the impedance phase would show', () => {
+  const state = (hex) => BCS.hexToBytes(hex)[5];
+  assert.strictEqual(state(REAL.idle), 1);
+  assert.strictEqual(state(REAL.rising), 1);
+  assert.strictEqual(state(REAL.finalW), 0);
+  for (const h of [REAL.idle, REAL.stepOn, REAL.rising, REAL.finalW]) {
+    assert.ok(![2, 3].includes(state(h)),
+      'no capture we hold ever reached the impedance phase');
+  }
+});
+
+test('the one real record says ten impedance slots, all of them empty', () => {
+  const b = BCS.hexToBytes(REAL.record);
+  assert.strictEqual(b[4], 0xa7, 'record upload');
+  assert.strictEqual(b[14], 10, 'the count is on the wire, not three and not assumed');
+  const values = [];
+  for (let i = 0; i < 10; i += 1) values.push((b[15 + i * 2] << 8) | b[16 + i * 2]);
+  assert.deepStrictEqual(values, new Array(10).fill(0),
+    'the scale returned the form and measured nothing');
 });
