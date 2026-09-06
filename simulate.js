@@ -128,13 +128,31 @@ async function askValid(question, { parse, valid, hint, fallback }) {
 
 // ------------------------------------------------------------------ the panel
 
+/*
+ * Everything, in a sensible order — not a curated subset.
+ *
+ * This list used to hold twelve rows, and anything computed but unlisted was
+ * invisible. Someone comparing the terminal against the phone could not tell
+ * whether a missing number was not computed, not sent by the scale, or simply
+ * not printed, which are three very different problems. Any derived key not
+ * named here is still printed, after these, under its own name.
+ */
 const SHOW = [
   ['bodyFatPercent', 'Body fat'], ['fatMassKg', 'Fat mass'],
-  ['muscleMassKg', 'Muscle mass'], ['skeletalMuscleMassKg', 'Skeletal muscle'],
-  ['bodyWaterLitres', 'Body water'], ['bodyWaterPercent', 'Water'],
-  ['boneMassKg', 'Bone mass'], ['proteinMassKg', 'Protein'],
-  ['bmi', 'BMI'], ['bmrKcal', 'BMR'], ['fatFreeMassKg', 'Fat-free mass'],
-  ['bmiCategoryWho', 'BMI category'],
+  ['fatFreeMassKg', 'Fat-free mass'], ['fatFreeMassIndex', 'Fat-free mass index'],
+  ['muscleMassKg', 'Muscle mass'], ['muscleMassPercent', 'Muscle rate'],
+  ['skeletalMuscleMassKg', 'Skeletal muscle'], ['skeletalMusclePercent', 'Skeletal muscle rate'],
+  ['skeletalMuscleIndex', 'Skeletal muscle index'],
+  ['bodyWaterLitres', 'Body water'], ['bodyWaterPercent', 'Water rate'],
+  ['boneMassKg', 'Bone mass'],
+  ['proteinMassKg', 'Protein'], ['proteinPercent', 'Protein rate'],
+  ['bmi', 'BMI'], ['bmiCategoryWho', 'BMI category'],
+  ['bmiCategoryAsiaPacific', 'BMI category (Asia-Pacific)'],
+  ['bmrKcal', 'BMR'],
+  ['idealWeightRangeKg', 'Ideal weight'], ['healthyWeightRangeKg', 'Healthy range'],
+  ['weightAboveHealthyRangeKg', 'Above healthy range'],
+  ['bodyFatPercentBmiAnchor', 'Body fat (BMI method)'],
+  ['bodyFatGapPoints', 'Gap between methods'],
 ];
 
 function renderResult(m) {
@@ -166,15 +184,74 @@ function renderResult(m) {
     return;
   }
 
+  /*
+   * Two columns, because there are genuinely two answers.
+   *
+   * The left is the clinical one: Mifflin-St Jeor for BMR, Janssen 2000 for
+   * skeletal muscle, published and fitted against reference methods. The right
+   * is what the vendor's own app shows for the same reading, which uses
+   * different conventions — Katch-McArdle from lean mass, muscle as fat-free
+   * mass minus their bone figure.
+   *
+   * Neither is wrong. They answer different questions, and showing only the
+   * first made the panel look broken to anyone holding the phone app next to
+   * it: BMR differed by 290 kcal and bone by two thirds of a kilo, for no
+   * reason the screen explained.
+   */
+  const vm = m.vendorMatch || {};
+  const hasVendor = Object.keys(vm).some((k) => typeof vm[k] === 'number');
+  // Width from the longest label actually printed, so "Skeletal muscle index"
+  // does not run into its own value.
+  const W = Math.max(18, ...SHOW.filter(([k]) => k in m.derived).map(([, l]) => l.length)) + 2;
   say('');
+  if (hasVendor) say(`  ${C.dim}${''.padEnd(W)}${'computed'.padEnd(15)}your app${C.off}`);
   for (const [key, label] of SHOW) {
     if (!(key in m.derived)) continue;
     const unit = m.units[key] ? ' ' + m.units[key] : '';
-    // Vendor-convention figures have no clinical validation behind them, so
-    // they are dimmed rather than presented like the rest.
     const soft = m.confidence[key] === 'derived-vendor-convention';
     const value = `${m.derived[key]}${unit}`;
-    say(`  ${label.padEnd(18)}${soft ? C.dim : ''}${value}${C.off}`);
+    const alt = typeof vm[key] === 'number' && vm[key] !== m.derived[key]
+      ? `${C.cyan}${vm[key]}${unit}${C.off}`
+      : '';
+    say(`  ${label.padEnd(W)}${soft ? C.dim : ''}${value.padEnd(15)}${C.off}${alt}`);
+  }
+  // Anything computed but not named above, so nothing is silently withheld.
+  const named = new Set(SHOW.map(([k]) => k));
+  const extra = Object.keys(m.derived).filter((k) => !named.has(k)
+    && !['weightKg', 'impedanceOhm', 'bodyFatRecommendedKey'].includes(k));
+  for (const key of extra) {
+    const unit = m.units[key] ? ' ' + m.units[key] : '';
+    say(`  ${C.dim}${key.padEnd(W)}${m.derived[key]}${unit}${C.off}`);
+  }
+
+  if (hasVendor) {
+    say('');
+    say(`  ${C.dim}The second column reproduces the vendor app's conventions:`);
+    say(`  ${C.dim}Katch-McArdle for BMR, fat-free mass minus bone for muscle,`);
+    say(`  ${C.dim}protein as the four-compartment remainder.${C.off}`);
+  }
+
+  /*
+   * What the phone shows and this does not, named with the reason.
+   *
+   * A value that is absent because no defensible formula exists looks exactly
+   * like a value that is absent because of a bug. Printing the reason is the
+   * only thing that tells them apart, and it is the difference between "your
+   * program is broken" and "nobody knows how to compute this honestly".
+   */
+  if (m.omitted && Object.keys(m.omitted).length) {
+    say('');
+    say(`  ${C.amber}Shown by the phone app, not computed here${C.off}`);
+    for (const [key, why] of Object.entries(m.omitted)) {
+      say(`  ${C.dim}${key}${C.off}`);
+      const wrapped = String(why).replace(/(.{1,68})(\s|$)/g, '$1\n').trim().split('\n');
+      for (const line of wrapped) say(`  ${C.dim}    ${line}${C.off}`);
+    }
+  }
+  // What the app shows and this cannot yet reproduce, named rather than absent.
+  const pending = (m.vendorMatch && m.vendorMatch.unresolved) || {};
+  for (const [k, why] of Object.entries(pending)) {
+    say(`  ${C.amber}${k}: ${why}${C.off}`);
   }
 
   if (m.bodyFatRecommended) {
@@ -248,35 +325,22 @@ async function main() {
   }
 
   /*
-   * Who the SCALE is told it is measuring.
+   * The scale is handed a placeholder, and the real details are asked for
+   * afterwards.
    *
-   * This is not the profile the results are computed from — that is still
-   * asked for after the reading is latched, and can be changed afterwards
-   * without re-measuring. This is the identity written into the handshake,
-   * because an 8-electrode scale decides whether to run its impedance sweep
-   * before anyone stands on it, and it decides using what it has been told.
+   * This used to prompt up front, on the reasoning that an 8-electrode scale
+   * decides whether to run its sweep from the identity it is given during the
+   * handshake. The first half of that is true; the conclusion was not. The
+   * scale needs a WELL-FORMED profile with the impedance bit set, and it has
+   * run its sweep every time since with a declared weight of 60 kg, which
+   * nobody here weighs. What it wants is a valid frame, not a true one.
    *
-   * Left unasked it was sent a stand-in: 170 cm, 30 years old, male. That is
-   * a plausible reason for it to weigh and decline to measure.
+   * So the deferred flow the app actually needs is restored: press the button,
+   * step on, and enter your details once the reading is latched. Nothing about
+   * the measurement depends on answering first, and a person standing on a
+   * scale should not be filling in a form.
    */
-  say('');
-  say(`${C.bold}Who is the scale measuring?${C.off}`);
-  say(`  ${C.dim}The scale is told this during the handshake, before you step on.${C.off}`);
-  say(`  ${C.dim}Your results are still computed from what you enter afterwards.${C.off}`);
-  const who = {
-    sex: await askValid(`  Sex ${C.dim}[male]${C.off} `, {
-      parse: (v) => v.toLowerCase(), fallback: 'male',
-      valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
-    }),
-    age: await askValid('  Age  ', {
-      parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
-      hint: 'Enter an age between 5 and 120.',
-    }),
-    heightCm: await askValid('  Height in cm  ', {
-      parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
-      hint: 'Enter a height between 90 and 250 cm.',
-    }),
-  };
+  const who = null;
 
   for (;;) {
     // ---------------------------------------------------------------- IDLE
@@ -312,8 +376,8 @@ async function main() {
         // The scale runs its impedance program after the weight locks. Hanging
         // up before it finishes is what produced weight-only readings.
         impedanceWaitSec: Number(arg('--impedance-wait', 30)),
-        // Written to the scale during the handshake, used for nothing else.
-        scaleProfile: who,
+        // No scaleProfile: the driver sends its own placeholder, which is all
+        // the scale needs to start measuring.
       });
     } catch (err) {
       clearLive();
@@ -338,18 +402,18 @@ async function main() {
     say(`  ${C.dim}nothing is re-read until you press Measure Me again.${C.off}`);
     say('');
 
-    const sex = await askValid(`  Sex ${C.dim}[${who.sex}]${C.off} `, {
-      parse: (v) => v.toLowerCase(), fallback: who.sex,
+    const sex = await askValid(`  Sex ${C.dim}[male]${C.off} `, {
+      parse: (v) => v.toLowerCase(), fallback: 'male',
       valid: (v) => v === 'male' || v === 'female',
       hint: 'Enter male or female.',
     });
-    const age = await askValid(`  Age ${C.dim}[${who.age}]${C.off} `, {
-      parse: Number, fallback: who.age,
+    const age = await askValid('  Age  ', {
+      parse: Number,
       valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
       hint: 'Enter an age between 5 and 120.',
     });
-    const heightCm = await askValid(`  Height in cm ${C.dim}[${who.heightCm}]${C.off} `, {
-      parse: Number, fallback: who.heightCm,
+    const heightCm = await askValid('  Height in cm  ', {
+      parse: Number,
       valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
       hint: 'Enter a height between 90 and 250 cm.',
     });

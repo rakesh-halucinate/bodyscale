@@ -345,6 +345,31 @@
         idealWeightBasis: 'BMI 22 at this height, as a single figure rather than a range.',
 
         /*
+         * Protein, from the four-compartment model rather than a fitted ratio.
+         *
+         * Fat-free mass is water plus protein plus mineral, so protein is what
+         * is left once the other two are taken out. Using this block's OWN
+         * water and bone figures keeps it internally consistent:
+         *
+         *   57.88 - 42.37 - 3.85 = 11.66 kg   against the app's 11.90, -2.0%
+         *
+         * This was previously listed as unresolved because a fixed fraction of
+         * fat-free mass had been ruled out by two readings. That was the right
+         * conclusion about the wrong hypothesis: it is not a ratio at all, it
+         * is a remainder, and the ratio drifted precisely because water and
+         * bone move differently from lean mass.
+         *
+         * The residual 2% is real. The app's own numbers close on 3.52 kg of
+         * mineral while it reports 3.90 kg of bone — about 11% apart — so its
+         * "bone mass" is not the mineral term in its own model. Which of the
+         * two feeds its protein figure is not recoverable from three readings.
+         */
+        proteinMassKg: round(ffm - tbwL - vendorBone, 2),
+        proteinBasis: 'fat-free mass minus water minus bone, the four-compartment '
+                    + 'remainder. Reads about 2% low against the app, whose bone and '
+                    + 'mineral terms differ by 11%.',
+
+        /*
          * Fitted to one reading, then DISPROVEN by a second.
          *
          * Session A gave protein 12.40 kg on 58.62 kg of fat-free mass, and
@@ -360,12 +385,28 @@
          * these are reported as unresolved rather than shipped as a number that
          * would look authoritative and be wrong.
          */
+        /*
+         * A third reading arrived and settled one of these two.
+         *
+         * Skeletal muscle over fat-free mass across three app readings:
+         *
+         *   58.62 -> 35.20   0.6005
+         *   58.23 -> 34.20   0.5873
+         *   57.97 -> 33.60   0.5796
+         *
+         * Monotonic and far outside rounding, so it is not a fixed fraction of
+         * fat-free mass. Fitting the 0.58 that suits the newest reading would
+         * be 3.4% wrong on the oldest. The implied slope, 2.46 kg of skeletal
+         * muscle per kg of lean mass, is physically impossible, which says the
+         * quantity is computed from impedance directly rather than derived from
+         * anything in this block.
+         */
         unresolved: {
-          proteinMassKg: 'A fixed fraction of fat-free mass, of weight, and of muscle mass '
-                       + 'are all ruled out by two readings. A third at a clearly different '
-                       + 'weight would narrow it.',
-          skeletalMuscleMassKg: 'Same. `values.skeletalMuscleMassKg` uses Janssen 2000, which '
-                              + 'is published and fitted, and reads about 6 kg lower.',
+          skeletalMuscleMassKg: 'Not a fixed fraction of fat-free mass, weight or muscle '
+                              + 'mass: the ratio drifts monotonically across three readings '
+                              + 'with an impossible implied slope, so it is computed from '
+                              + 'impedance directly. `values.skeletalMuscleMassKg` uses '
+                              + 'Janssen 2000, which is published and reads about 6 kg lower.',
         },
 
         /*

@@ -297,8 +297,19 @@
         ctx.log(`  Dr Trust: profile payload is ${payload.length} bytes, expected 30.`, 'warn');
       }
 
+      /*
+       * Say when this is a placeholder.
+       *
+       * A deferred capture sends no profile by design, so these are stand-ins.
+       * The scale runs its sweep on them regardless — what it needs is a
+       * well-formed frame with the impedance bit set, not a true one — but a
+       * log line reading "180 cm, 39y" when nobody supplied that is the kind
+       * of thing that costs an afternoon later.
+       */
+      const supplied = prof.heightCm || prof.age || prof.sex;
       const what = `user profile 0xC0 (${h} cm, ${age}y, ${male ? 'male' : 'female'},`
-        + ` declared ${declaredKg} kg, impedance requested)`;
+        + ` declared ${declaredKg} kg, impedance requested`
+        + `${supplied ? '' : ' — placeholder, host sent no profile'})`;
       const st = ctx.state.drt;
       st.handshakeDone = true;
       await ctx.write(0xffb0, 0xffb1, drTrust.packet(payload, drTrust.nextPkg(st)), what);

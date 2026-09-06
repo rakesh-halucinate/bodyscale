@@ -49,18 +49,7 @@ const STEP_OFF = 'Step off the scale and step back on.';
  * @param {number}   [opts.timeoutMs]
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null, configDir:string}>}
  */
-/*
- * The rehearsal now opens by asking who the scale is measuring, because that
- * identity goes into the handshake before anyone steps on. Every script would
- * otherwise have to carry the same three answers, and a test that forgot them
- * would fail somewhere far from the cause, so the harness supplies them.
- * Pass `identity` to override, or `identity: []` to script them by hand.
- */
-const WHO = ['male', '39', '180'];
-
-function run({ script, fixture = null, env = {}, configDir = null, timeoutMs = 15000,
-              identity = WHO }) {
-  script = identity.concat(script);
+function run({ script, fixture = null, env = {}, configDir = null, timeoutMs = 15000 }) {
   const dir = configDir || H.configDir('sim');
   const argv = [SIMULATE, '--replay'];
   if (fixture) argv.push(fixture);
@@ -198,9 +187,12 @@ test('INT-SIM-04  the computed panel shows body fat, muscle mass and BMI with th
   const r = await run({ script: FULL });
   const panel = from(r.stdout, '[COMPUTING]');
 
-  const fat = panel.match(/^\s+Body fat {2,}([0-9.]+) %$/m);
-  const muscle = panel.match(/^\s+Muscle mass {2,}([0-9.]+) kg$/m);
-  const bmi = panel.match(/^\s+BMI {2,}([0-9.]+) kg\/m²$/m);
+  // The panel now has two columns — what this computes, and what the vendor's
+  // own app shows for the same reading — so a value is no longer the end of
+  // its line.
+  const fat = panel.match(/^\s+Body fat {2,}([0-9.]+) %/m);
+  const muscle = panel.match(/^\s+Muscle mass {2,}([0-9.]+) kg/m);
+  const bmi = panel.match(/^\s+BMI {2,}([0-9.]+) kg\/m²/m);
   assert.ok(fat, 'body fat is a percentage');
   assert.ok(muscle, 'muscle mass is in kilograms');
   assert.ok(bmi, 'BMI is in kg/m²');
@@ -212,7 +204,7 @@ test('INT-SIM-04  the computed panel shows body fat, muscle mass and BMI with th
   assert.ok(Math.abs(Number(bmi[1]) - 30.2) < 0.1,
     `BMI ${bmi[1]} matches the weight and height that were entered`);
 
-  assert.match(panel, /^\s+BMR {2,}\d+ kcal\/day$/m, 'and BMR carries its unit too');
+  assert.match(panel, /^\s+BMR {2,}\d+ kcal\/day/m, 'and BMR carries its unit too');
 });
 
 // Prevents: a body fat figure of unknown provenance. One comes from a measured
@@ -243,11 +235,11 @@ test('INT-SIM-06  with no impedance the recommended line names BMI instead', asy
 
   // Not one impedance-derived row is invented to fill the gap.
   for (const label of ['Body fat', 'Fat mass', 'Muscle mass', 'Skeletal muscle',
-                       'Body water', 'Water', 'Bone mass', 'Protein', 'Fat-free mass']) {
+                       'Body water', 'Water rate', 'Bone mass', 'Protein', 'Fat-free mass']) {
     assert.strictEqual(row(panel, label), null, `no ${label} row without an impedance`);
   }
-  assert.match(panel, /^\s+BMI {2,}[0-9.]+ kg\/m²$/m, 'BMI still stands: it needs no impedance');
-  assert.match(panel, /^\s+BMR {2,}\d+ kcal\/day$/m, 'and so does BMR');
+  assert.match(panel, /^\s+BMI {2,}[0-9.]+ kg\/m²/m, 'BMI still stands: it needs no impedance');
+  assert.match(panel, /^\s+BMR {2,}\d+ kcal\/day/m, 'and so does BMR');
   assert.strictEqual(r.code, 0);
 });
 

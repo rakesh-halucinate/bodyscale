@@ -739,18 +739,23 @@ test('INT-TRUST-27  vendorMatch reproduces the scale app, from a real reading', 
   // Two fits from one reading were disproven by a second. They must be named as
   // unresolved rather than shipped as a number that looks authoritative.
   assert.ok(vm.unresolved, 'what two readings could not settle is stated');
-  assert.ok(!('proteinMassKg' in vm), 'the disproven protein fit was withdrawn');
+  // Protein is back, as the four-compartment remainder rather than the fitted
+  // ratio that two readings disproved. It must equal that remainder exactly.
+  assert.ok(Math.abs(vm.proteinMassKg
+    - (vm.fatFreeMassKg - vm.bodyWaterLitres - vm.boneMassKg)) < 0.01,
+  'protein is a remainder, not a fit');
   assert.ok(!('skeletalMuscleMassKg' in vm), 'and the disproven skeletal muscle fit');
-  for (const k of ['proteinMassKg', 'skeletalMuscleMassKg']) {
-    assert.ok(vm.unresolved[k], `${k} is listed as unresolved`);
-  }
+  // Only skeletal muscle is still unresolved. Protein moved out of that list
+  // when it turned out not to be a ratio at all.
+  assert.ok(vm.unresolved.skeletalMuscleMassKg, 'skeletal muscle is listed as unresolved');
+  assert.ok(!vm.unresolved.proteinMassKg, 'protein no longer is');
 });
 
 // Prevents: shipping a fit that a second observation already contradicts. Two
 // real sessions eighteen minutes apart give protein/fat-free of 0.21153 then
 // 0.20780, and skeletal-muscle/fat-free of 0.6005 then 0.5873 — both moved far
 // beyond rounding, so neither is a fixed fraction of anything.
-test('INT-TRUST-29  the two disproven vendor fits stay withdrawn', async () => {
+test('INT-TRUST-29  skeletal muscle stays withdrawn, protein no longer needs to be', async () => {
   const BIA = require(require('path').join(H.ROOT, 'bia.js'));
   const a = BIA.estimate({ weightKg: 94.25, impedanceOhm: 582, heightCm: 180.34, age: 39, sex: 'male' });
   const b = BIA.estimate({ weightKg: 96.40, impedanceOhm: 595, heightCm: 180.34, age: 39, sex: 'male' });
@@ -761,10 +766,23 @@ test('INT-TRUST-29  the two disproven vendor fits stay withdrawn', async () => {
     assert.ok(Math.abs(r.vendorMatch.muscleMassKg - muscle) <= 0.25);
     assert.ok(Math.abs(r.vendorMatch.bmrKcal - bmr) <= 4);
   }
-  // And the ones that did not are absent from both.
+  /*
+   * Protein came back, and not as a fitted ratio.
+   *
+   * It was withdrawn because a fixed fraction of fat-free mass had been ruled
+   * out by two readings — which was the right conclusion about the wrong
+   * hypothesis. It is not a ratio, it is the four-compartment remainder: what
+   * is left of lean mass once water and mineral are removed. The ratio drifted
+   * precisely because water and bone move differently from lean mass.
+   */
   for (const r of [a, b]) {
-    assert.ok(!('proteinMassKg' in r.vendorMatch));
-    assert.ok(!('skeletalMuscleMassKg' in r.vendorMatch));
+    const vm = r.vendorMatch;
+    assert.ok(Math.abs(vm.proteinMassKg - (vm.fatFreeMassKg - vm.bodyWaterLitres - vm.boneMassKg)) < 0.01,
+      'protein is a remainder, so it must equal one');
+    // Skeletal muscle is still out: across three app readings its ratio to
+    // lean mass drifts monotonically, with a physically impossible slope.
+    assert.ok(!('skeletalMuscleMassKg' in vm));
+    assert.ok(vm.unresolved && vm.unresolved.skeletalMuscleMassKg);
   }
 });
 
