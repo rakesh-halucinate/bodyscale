@@ -77,7 +77,7 @@ function fixtureWithUntrustworthyImpedance(tag) {
   // Rebuilt rather than byte-patched, so the trailer is correct.
   const record = events.filter((e) => e.t === 'frame' && / a7 /.test(e.hex)).pop();
   assert.ok(record, 'the recorded session still contains a record frame');
-  record.hex = H.recordFrame({ weightKg: 97.9, impedances: [1300] });
+  record.hex = H.recordFrame({ weightKg: 97.9, impedances: H.segmentalFor(1300) });
   return H.fixture(tag, events);
 }
 
@@ -180,7 +180,11 @@ test('INT-MEAS-05  measured.weightKg and measured.impedanceOhm are exactly what 
 
   assert.strictEqual(terminal.measured.weightKg, H.EXPECTED.weightKg);
   assert.strictEqual(terminal.measured.impedanceOhm, H.EXPECTED.impedanceOhm);
-  assert.deepStrictEqual(Object.keys(terminal.measured).sort(), ['impedanceOhm', 'weightKg']);
+  // `impedances` is the raw slot set. The scale sends ten and how they combine
+  // into one whole-body figure is inferred, so the reading has to record what
+  // was measured as well as what was made of it.
+  assert.deepStrictEqual(Object.keys(terminal.measured).sort(),
+    ['impedanceOhm', 'impedances', 'weightKg']);
 
   // The final progress frame and the envelope must agree; the app shows the
   // live number and then the settled one, and they must not disagree.
@@ -390,7 +394,12 @@ test('INT-MEAS-17  a different profile on the same recorded session produces dif
   const { terminal } = await H.measureOnce({ profile: { age: 25, heightCm: 160, sex: 'female' } });
 
   assert.deepStrictEqual(terminal.profile, { sex: 'female', age: 25, heightCm: 160 });
-  assert.deepStrictEqual(terminal.measured, { weightKg: H.EXPECTED.weightKg, impedanceOhm: H.EXPECTED.impedanceOhm });
+  // `measured` also carries `impedances`, the raw slots the scale sent, so a
+  // reading records what was actually measured and not only the single figure
+  // inferred from it.
+  assert.strictEqual(terminal.measured.weightKg, H.EXPECTED.weightKg);
+  assert.strictEqual(terminal.measured.impedanceOhm, H.EXPECTED.impedanceOhm);
+  assert.strictEqual(terminal.measured.impedances.length, 10);
 
   assert.strictEqual(terminal.derived.bmi, 38.2);
   assert.strictEqual(terminal.derived.bmrKcal, 1693);

@@ -142,6 +142,22 @@ function renderResult(m) {
   say(`  ${C.bold}${m.measured.weightKg} kg${C.off}`
     + (m.measured.impedanceOhm ? `   ${C.dim}${m.measured.impedanceOhm} Ω${C.off}` : `   ${C.dim}no impedance${C.off}`));
 
+  /*
+   * Show every impedance the scale sent, not just the figure derived from
+   * them. How ten slots become one whole-body number is inferred from their
+   * magnitudes rather than read out of the vendor code, so the raw set has to
+   * be visible for anyone to check it against the app's own reading.
+   */
+  const slots = m.measured.impedances;
+  if (Array.isArray(slots) && slots.length >= 5) {
+    const seg = (g) => `trunk ${g[0]} Ω   limbs ${g.slice(1).join(', ')} Ω`;
+    say('');
+    say(`  ${C.dim}measured segments${C.off}`);
+    say(`  ${C.dim}  ${seg(slots.slice(0, 5))}${C.off}`);
+    if (slots.length >= 10) say(`  ${C.dim}  ${seg(slots.slice(5, 10))}${C.off}`);
+    say(`  ${C.dim}  whole body ${m.measured.impedanceOhm} Ω = one arm + trunk + one leg${C.off}`);
+  }
+
   // Nothing at all was computed: the weight is not a person's.
   if (!m.trust.impedanceFree) {
     say('');

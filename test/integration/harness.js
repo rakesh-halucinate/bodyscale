@@ -264,3 +264,27 @@ module.exports.recordFrame = function recordFrame({ weightKg, impedances = [], c
   frame.push(payload.reduce((a, x) => a + x, 0) & 0x1f);
   return frame.map((x) => x.toString(16).padStart(2, '0')).join(' ');
 };
+
+/**
+ * Ten impedance slots shaped like a real segmental reading, whose hand-to-foot
+ * path comes to `wholeBodyOhm`.
+ *
+ * The scale sends two groups of five: a trunk value of 20-30 ohm followed by
+ * four limbs of 250-350. The whole-body figure the equations want is one arm
+ * plus the trunk plus one leg, so a fixture that puts everything in slot 0 —
+ * which is what these tests used to do — is not a reading the hardware could
+ * produce and exercises a path the driver no longer takes.
+ *
+ * @param {number} wholeBodyOhm
+ * @returns {number[]} ten values
+ */
+module.exports.segmentalFor = function segmentalFor(wholeBodyOhm) {
+  const r2 = (n) => Math.round(n * 10) / 10;
+  const trunk = r2(wholeBodyOhm * 0.05);
+  const limb = r2((wholeBodyOhm - trunk) / 2);
+  // rightArm and rightLeg carry the path; the left side differs slightly, as
+  // it does in a real body.
+  const group = [trunk, limb, r2(limb * 1.03), limb, r2(limb * 1.05)];
+  const second = group.map((v) => r2(v * 0.92));
+  return [...group, ...second];
+};

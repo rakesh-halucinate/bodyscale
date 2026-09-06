@@ -573,24 +573,49 @@
         impedances.push(((b[at] << 8) | b[at + 1]) / 10);
       }
       const measured = impedances.filter((v) => v > 0);
+
       /*
-       * PROVISIONAL: how these slots combine into one whole-body impedance is
-       * not yet known.
+       * Ten values are two groups of five, and each group is a segmental set.
        *
-       * The count comes off the wire and this scale declares ten. The SDK has
-       * a segmental derivation for six raw values — imp = ((z2+z3+z4+z5) -
-       * 2*z1 - 2*z6) / 4 and so on — but ten is neither six nor a multiple of
-       * it, so that path does not fire and we do not know what the ten mean.
-       * They may be five segments at two frequencies, or five pairs, or
-       * something else again.
+       * A real reading from this scale:
        *
-       * Summing them is a placeholder chosen because it is simple and states
-       * itself plainly, not because it is right. The raw values are reported
-       * alongside so the mapping can be settled by comparing one real reading
-       * against the vendor app's own numbers. Until that happens every derived
-       * figure downstream of this carries the warning below.
+       *   27.8  325.3 333.5 320.4 350.9   |   25.7  294.0 299.7 285.5 318.3
+       *   ^^^^  ^^^^^^^^^^^^^^^^^^^^^^^       ^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+       *   trunk        four limbs             trunk        four limbs
+       *
+       * That shape is not a guess: trunk impedance is characteristically 20-30
+       * ohm because the path is short and wide, while a limb is 250-350. Both
+       * groups show it, in the same position, which is what a segmental set
+       * looks like and is why the count is ten rather than five — two passes,
+       * almost certainly at two frequencies.
+       *
+       * The whole-body figure the BIA equations want is a single hand-to-foot
+       * path, so it is one arm plus the trunk plus one leg. Summing all ten,
+       * which is what the first version of this did, walks every limb twice and
+       * produced 2581 ohm: outside any physical band, so the trust rules threw
+       * the whole reading away.
+       *
+       * PROVISIONAL: the order within a group is inferred from the magnitudes,
+       * not read out of the vendor code, and which group is which frequency is
+       * unknown. The first group is used. Every derived value carries a warning
+       * until these numbers have been checked against the vendor app's own.
        */
-      const ohm = measured.reduce((a, v) => a + v, 0);
+      const group = measured.length >= 5 ? measured.slice(0, 5) : measured;
+      let segments = null;
+      let ohm = 0;
+      if (group.length === 5) {
+        const [trunk, ...limbs] = group;
+        limbs.sort((a, b) => a - b);
+        segments = {
+          trunk,
+          limbs: group.slice(1),
+          // Hand to foot down one side: the path the classic equations assume.
+          rightArm: group[1], leftArm: group[2], rightLeg: group[3], leftLeg: group[4],
+        };
+        ohm = group[1] + trunk + group[3];
+      } else {
+        ohm = measured.reduce((a, v) => a + v, 0);
+      }
 
       if (count > 0) {
         ctx.log(`  Dr Trust: record with ${count} impedance slot(s), `

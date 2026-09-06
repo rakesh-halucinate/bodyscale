@@ -70,7 +70,7 @@ const RECORD_FRAME = { t: 'frame', uuid: FFB3,
   hex: '30 00 23 00 a7 00 00 00 00 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 '
      + '00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 08' };
 /** Subtype 0x01: the impedances, summing to 529.9 ohm. */
-const IMPEDANCE_FRAME = { t: 'frame', uuid: FFB3, hex: '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 11 00 00 00 00 0a' };
+const IMPEDANCE_FRAME = { t: 'frame', uuid: FFB3, hex: '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 01 09 09 d5 0a 21 09 d5 0a 53 00 f4 09 0c 09 52 09 0c 09 80 00 00 00 00 13' };
 
 /**
  * Connected, subscribed, and then nothing. The recording deliberately carries

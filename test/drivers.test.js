@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const BCS = require('../bcs.js');
+const H = require('./integration/harness.js');
 const D = require('../drivers.js');
 
 function frame(bytes) { const b = new Uint8Array(20); b.set(bytes); return b; }
@@ -482,4 +483,49 @@ test('the packed weight word is masked to its low 18 bits', async () => {
   const { out } = await feed([withFlags]);
   assert.ok(out[0] && out[0].values, 'decodes despite the flag bits');
   assert.strictEqual(out[0].values.weight, 98.5, 'flags masked off, not read as weight');
+});
+
+/*
+ * A real reading from the scale, once P-1 finally ran:
+ *
+ *   27.8  325.3 333.5 320.4 350.9  |  25.7  294.0 299.7 285.5 318.3
+ *   ^^^^  ^^^^^^^^^^^^^^^^^^^^^^^     ^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+ *   trunk        four limbs           trunk        four limbs
+ *
+ * Ten values are two groups of five. The trunk is 20-30 ohm because the path
+ * is short and wide; a limb is 250-350. Both groups show that shape in the
+ * same position, which is what tells us it is a segmental set and not ten
+ * independent readings.
+ */
+test('ten impedances are read as two segmental groups, not summed', async () => {
+  const REAL_TEN = [27.8, 325.3, 333.5, 320.4, 350.9, 25.7, 294, 299.7, 285.5, 318.3];
+  const hex = H.recordFrame({ weightKg: 97.6, impedances: REAL_TEN });
+  const { out } = await feed([hex]);
+  const r = out[0];
+
+  assert.deepStrictEqual(r.values.impedances, REAL_TEN, 'every slot is reported raw');
+  assert.strictEqual(r.values.impedanceCount, 10);
+
+  // Hand to foot down one side: one arm, the trunk, one leg. Summing all ten
+  // walks every limb twice and gave 2581 Ω — outside any physical band, so the
+  // trust rules discarded the entire reading and nothing was computed.
+  assert.strictEqual(r.values.impedanceOhm, 673.5);
+  assert.notStrictEqual(r.values.impedanceOhm, 2581.1);
+
+  // And it now survives the plausibility band, which is the whole point.
+  assert.ok(r.values.impedanceOhm >= 150 && r.values.impedanceOhm <= 1200,
+    'a whole-body figure the equations will accept');
+  assert.ok(r.values.bodyFatPercent > 0, 'so body composition is actually produced');
+
+  // The provisional mapping must announce itself rather than pass as settled.
+  assert.ok(r.warnings.some((w) => /not yet established|provisional/i.test(w)),
+    'the combination is inferred from magnitudes, and says so');
+});
+
+test('a partial sweep is not forced into a segmental reading', async () => {
+  // Fewer than five values cannot be a group; the driver must not invent one.
+  const hex = H.recordFrame({ weightKg: 97.6, impedances: [300, 25] });
+  const { out } = await feed([hex]);
+  assert.deepStrictEqual(out[0].values.impedances.slice(0, 2), [300, 25]);
+  assert.strictEqual(out[0].values.impedanceOhm, 325, 'falls back to the plain total');
 });

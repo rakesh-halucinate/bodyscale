@@ -419,6 +419,16 @@ function measureOnce(opts) {
       if (values.impedanceOhm > 0) {
         const z = values.impedanceOhm;
         capture.impedance = z;
+        /*
+         * Keep every raw slot alongside the single figure.
+         *
+         * The scale sends ten, and how they combine into one whole-body value
+         * is inferred rather than known. Carrying the raw set means a reading
+         * can be checked against the vendor app's own numbers without taking
+         * another one, and means a corrected mapping can be applied to
+         * readings already captured.
+         */
+        if (Array.isArray(values.impedances)) capture.impedances = values.impedances;
         capture.impedancePlausible = z >= PLAUSIBLE_MIN && z <= PLAUSIBLE_MAX;
         if (!capture.impedancePlausible && !capture.waitedForProgram) {
           capture.waitedForProgram = true;
@@ -704,7 +714,14 @@ function buildResult(res, profile, extra) {
     timestamp: new Date().toISOString(),
     device: res.device,
     model: res.identified ? res.identified.model : null,
-    measured: { weightKg: cap.weight, impedanceOhm: cap.impedance },
+    // The raw slots ride along so a reading round-trips unchanged through
+    // compute, and so a corrected whole-body mapping can be applied later to
+    // readings already taken.
+    measured: {
+      weightKg: cap.weight,
+      impedanceOhm: cap.impedance,
+      ...(cap.impedances ? { impedances: cap.impedances } : {}),
+    },
     derived,
     units,
     confidence,
@@ -971,7 +988,11 @@ async function serve(a) {
           timestamp: new Date().toISOString(),
           device: res.device,
           model: res.identified ? res.identified.model : null,
-          measured: { weightKg: res.capture.weight, impedanceOhm: res.capture.impedance },
+          measured: {
+            weightKg: res.capture.weight,
+            impedanceOhm: res.capture.impedance,
+            ...(res.capture.impedances ? { impedances: res.capture.impedances } : {}),
+          },
           derived: {}, units: {}, confidence: {}, omitted: {},
           trust: { impedanceFree: false, impedanceDerived: false },
           bodyFatRecommended: null, crossCheck: null, flags: [],
@@ -1028,6 +1049,12 @@ async function serve(a) {
         const capture = {
           weight: Number(req.measured.weightKg),
           impedance: req.measured.impedanceOhm == null ? null : Number(req.measured.impedanceOhm),
+          // Carried straight back out. A reading handed to compute must come
+          // back identical, and the raw slots are the only record of what the
+          // scale actually measured.
+          ...(Array.isArray(req.measured.impedances)
+            ? { impedances: req.measured.impedances.map(Number) }
+            : {}),
         };
         const body = buildResult(
           { capture, device: req.device || null, identified: req.model ? { model: req.model } : null },

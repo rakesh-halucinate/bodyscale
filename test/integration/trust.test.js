@@ -87,7 +87,8 @@ function recordFixture(tag, impedanceTenths, grams) {
     { t: 'ready' },
     { t: 'frame',
       uuid: '0000ffb3-0000-1000-8000-00805f9b34fb',
-      hex: H.recordFrame({ weightKg: grams / 1000, impedances: [impedanceTenths / 10] }) },
+      hex: H.recordFrame({ weightKg: grams / 1000,
+        impedances: H.segmentalFor(impedanceTenths / 10) }) },
     { t: 'end', reason: 'finished' },
   ]);
 }
@@ -168,9 +169,12 @@ test('INT-TRUST-01  a reading with impedance yields exactly the 24 documented de
 test('INT-TRUST-02  a reading that survives its checks is marked trusted and echoes both raw numbers', async () => {
   const m = await withImpedance();
   assert.deepStrictEqual(m.trust, { impedanceFree: true, impedanceDerived: true });
-  assert.deepStrictEqual(m.measured, {
-    weightKg: H.EXPECTED.weightKg, impedanceOhm: H.EXPECTED.impedanceOhm,
-  });
+  // `measured` also carries `impedances`, the raw slots the scale sent, so a
+  // reading records what was actually measured and not only the single figure
+  // inferred from it.
+  assert.strictEqual(m.measured.weightKg, H.EXPECTED.weightKg);
+  assert.strictEqual(m.measured.impedanceOhm, H.EXPECTED.impedanceOhm);
+  assert.strictEqual(m.measured.impedances.length, 10);
   assert.strictEqual(m.derived.bodyFatPercent, 36);
   assert.strictEqual(m.derived.bmi, 30.2);
   assert.strictEqual(m.derived.bmiCategoryWho, 'obese class I');
