@@ -200,27 +200,39 @@ function renderResult(m) {
    */
   const vm = m.vendorMatch || {};
   const hasVendor = Object.keys(vm).some((k) => typeof vm[k] === 'number');
-  // Width from the longest label actually printed, so "Skeletal muscle index"
-  // does not run into its own value.
-  const W = Math.max(18, ...SHOW.filter(([k]) => k in m.derived).map(([, l]) => l.length)) + 2;
+  const W = Math.max(18, ...SHOW.filter(([k]) => k in m.derived || typeof vm[k] === 'number')
+    .map(([, l]) => l.length)) + 2;
+
+  /*
+   * The scale's own figure leads.
+   *
+   * This used to lead with the clinical equations — Mifflin-St Jeor for BMR,
+   * Janssen for skeletal muscle — and tuck the vendor's convention in a side
+   * column. That is the wrong way round for anyone holding the phone next to
+   * the terminal: the number they are checking against was in the second
+   * column, and the first looked simply wrong, by 17% on BMR.
+   *
+   * So where the vendor convention is known, it is the number. The clinical
+   * one is still shown beside it when the two genuinely differ, because they
+   * answer different questions and the difference is the interesting part.
+   */
   say('');
-  if (hasVendor) say(`  ${C.dim}${''.padEnd(W)}${'computed'.padEnd(15)}your app${C.off}`);
+  if (hasVendor) say(`  ${C.dim}${''.padEnd(W)}${'your scale'.padEnd(15)}clinical${C.off}`);
   for (const [key, label] of SHOW) {
-    // A row may exist only in the vendor column — visceral fat is computed
-    // from the vendor's own formula and has no clinical counterpart.
-    if (!(key in m.derived) && typeof vm[key] !== 'number') continue;
-    if (!(key in m.derived)) {
-      say(`  ${label.padEnd(W)}${C.dim}${'—'.padEnd(15)}${C.off}${C.cyan}${vm[key]}${C.off}`);
-      continue;
-    }
+    const mine = m.derived[key];
+    const theirs = vm[key];
+    const has = (v) => v !== undefined && v !== null;
+    if (!has(mine) && !has(theirs)) continue;
+
     const unit = m.units[key] ? ' ' + m.units[key] : '';
-    const soft = m.confidence[key] === 'derived-vendor-convention';
-    const value = `${m.derived[key]}${unit}`;
-    const alt = typeof vm[key] === 'number' && vm[key] !== m.derived[key]
-      ? `${C.cyan}${vm[key]}${unit}${C.off}`
-      : '';
-    say(`  ${label.padEnd(W)}${soft ? C.dim : ''}${value.padEnd(15)}${C.off}${alt}`);
+    const primary = has(theirs) ? theirs : mine;
+    const differs = has(theirs) && has(mine) && String(theirs) !== String(mine);
+    const soft = !has(theirs) && m.confidence[key] === 'derived-vendor-convention';
+
+    say(`  ${label.padEnd(W)}${soft ? C.dim : ''}${`${primary}${unit}`.padEnd(15)}${C.off}`
+      + (differs ? `${C.dim}${mine}${unit}${C.off}` : ''));
   }
+
   // Anything computed but not named above, so nothing is silently withheld.
   const named = new Set(SHOW.map(([k]) => k));
   const extra = Object.keys(m.derived).filter((k) => !named.has(k)
@@ -232,9 +244,9 @@ function renderResult(m) {
 
   if (hasVendor) {
     say('');
-    say(`  ${C.dim}The second column reproduces the vendor app's conventions:`);
-    say(`  ${C.dim}Katch-McArdle for BMR, fat-free mass minus bone for muscle,`);
-    say(`  ${C.dim}protein as the four-compartment remainder.${C.off}`);
+    say(`  ${C.dim}The first column is what your scale shows: Katch-McArdle for BMR,`);
+    say(`  ${C.dim}fat-free mass minus bone for muscle, protein as the four-compartment`);
+    say(`  ${C.dim}remainder. The second is the clinical equation, where it differs.${C.off}`);
   }
 
   /*
