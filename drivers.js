@@ -72,6 +72,13 @@
   //   three command packets (session ack, user profile, app name "icomon") -> scale starts
   //   measuring. Final data arrives as three 0x23 frames (weight, impedances, end-of-record).
   // =========================================================================
+  /* ICMeasureStep, as the SDK names the 0xA2 state byte. */
+  const STATE_NAMES = {
+    0: 'finished', 1: 'weighing',
+    2: 'impedance sweep running', 3: 'impedance sweep running',
+    4: 'heart rate',
+  };
+
   const drTrust = {
     id: 'drtrust',
     label: 'Dr Trust SSW532 / SSW533 (0xFFB0 icomon family)',
@@ -174,6 +181,7 @@
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
         profileSent: false,
         handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
+        sweepSeen: false, wireVersion: null,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -326,18 +334,78 @@
       const be24 = (o) => (b[o] << 16) | (b[o + 1] << 8) | b[o + 2];
 
       // ---------------- live weight stream, 0xFFB2 ----------------
-      // layout (marker i): [i]=0x07 [i+2]=0xA2 [i+3]=status [i+5..i+7]=weight BE24, grams
       if (u16 === 0xffb2) {
-        const i = drTrust.findMarker(b, 0x07, (k) => b[k + 2] === 0xa2);
-        if (i < 0 || i + 7 >= b.length) return null;
-        if (st.weightOffset !== i) {
-          st.weightOffset = i;
-          ctx.log(`  Dr Trust: weight frames aligned at marker offset ${i}; weight is a big-endian 24-bit gram count at byte ${i + 5}.`, 'info');
+        /*
+         * Command 0xA2, the live weight stream, read at fixed offsets:
+         *
+         *   [4] 0xA2   [5] state   [6..9] packed BE32   [10] heart rate
+         *
+         * The packed word is 14 flag bits and an 18-bit gram count, masked
+         * with 0x3FFFF. The old big-endian 24-bit read at byte 7 worked only
+         * because those upper bits are zero at these weights.
+         *
+         * THE STATE BYTE WAS BACKWARDS, and it is the most expensive mistake
+         * in this file. The SDK maps it:
+         *
+         *   1  weighing
+         *   2  impedance sweep running   <- this is the P-1 display
+         *   3  impedance sweep running
+         *   4  heart rate
+         *
+         * This driver treated 3 as "stable, final weight". So the instant the
+         * scale began the sweep we have spent every run waiting for, we
+         * declared the weight final, latched it, suppressed everything after
+         * it and closed the link — cutting off the measurement at the exact
+         * moment it started. The scale was being interrupted, not silent.
+         */
+        /*
+         * Two header lengths exist in this family and the command byte is how
+         * they are told apart, not a search for a magic number.
+         *
+         *   V2 (SSW533): [0]pkg [1..2]len [3]frag [4]cmd [5]state [6..9]packed
+         *   V1 (SSW532): [0]pkg [1]len   [2]frag [3]cmd [4]state [6..8]weight
+         *
+         * Guessing this by hunting for a 0x07 byte is what made the driver
+         * pattern-match on payload *length* and mis-read every field after it.
+         */
+        const v2 = b[4] === 0xa2;
+        const v1 = !v2 && b[3] === 0xa2;
+        if (!v2 && !v1) return null;
+        if (st.wireVersion !== (v2 ? 2 : 1)) {
+          st.wireVersion = v2 ? 2 : 1;
+          st.weightOffset = v2 ? 2 : 1;      // retained: the header length
+          ctx.log(`  Dr Trust: ${v2 ? 'V2' : 'V1'} framing (command at byte ${v2 ? 4 : 3}).`, 'info');
         }
-        const status = b[i + 3];
-        const grams = be24(i + 5);
+        const wireState = v2 ? b[5] : b[4];
+        // V2 packs 14 flag bits above an 18-bit gram count; V1 is a plain BE24.
+        const grams = v2
+          ? (((b[6] << 24) >>> 0) + (b[7] << 16) + (b[8] << 8) + b[9]) & 0x3ffff
+          : be24(6);
+        if (!Number.isFinite(grams)) return null;
         const kg = Math.round(grams) / 1000;
-        const settled = status === 0x00 || status === 0x03;   // 0x00 final (SSW533), 0x03 stable (SSW532)
+
+        /*
+         * The sweep states are V2 only. On the older framing 0x03 means a
+         * stable reading, which is what openScale's SSW532 handler treats it
+         * as, and we have no vendor evidence to overrule that for V1.
+         */
+        if (v2 && (wireState === 2 || wireState === 3)) {
+          if (!st.sweepSeen) {
+            st.sweepSeen = true;
+            ctx.log(`  Dr Trust: the scale has started its impedance sweep (state ${wireState}) — `
+              + 'this is the P-1 phase. Holding the link open and staying out of its way.', 'ok');
+          }
+          // Emphatically not a final weight: report nothing and keep listening.
+          return SUPPRESS;
+        }
+        if (v2 && wireState === 4) {
+          ctx.log('  Dr Trust: heart-rate phase (state 4).', 'info');
+          return SUPPRESS;
+        }
+
+        // Only a weight of zero, or the scale falling back to state 0 after a
+        // completed run, ends the reading. State 1 is someone standing on it.
+        const settled = v2 ? wireState === 0x00 : (wireState === 0x00 || wireState === 0x03);
         const csOk = drTrust.checksumOk(b);
         const warnings = [];
         if (!csOk) warnings.push(`Checksum mismatch (expected 0x${drTrust.checksum(b).toString(16)}, got 0x${b[b.length - 1].toString(16)}) — frame may be corrupt.`);
@@ -399,9 +467,10 @@
           raw: BCS.hex(b), units: 'SI', flagBits: [], warnings,
           fields: [
             Object.assign(field('Sequence', 0, 1, b[0], '', 'counts up every frame'), { rawHex: BCS.hex(b.slice(0, 1)) }),
-            Object.assign(field('Status', i + 3, 1, '0x' + status.toString(16).padStart(2, '0'), '',
-              settled ? 'measurement locked' : 'still settling'), { rawHex: BCS.hex(b.slice(i + 3, i + 4)) }),
-            Object.assign(field('Weight', i + 5, 3, kg, 'kg', `${grams} g, big-endian 24-bit`), { rawHex: BCS.hex(b.slice(i + 5, i + 8)) }),
+            Object.assign(field('State', v2 ? 5 : 4, 1, '0x' + wireState.toString(16).padStart(2, '0'), '',
+              STATE_NAMES[wireState] || 'unknown'), { rawHex: BCS.hex(b.slice(v2 ? 5 : 4, v2 ? 6 : 5)) }),
+            Object.assign(field('Weight', 6, 4, kg, 'kg', `${grams} g, low 18 bits of a packed big-endian word`),
+              { rawHex: BCS.hex(b.slice(6, 10)) }),
             Object.assign(field('Checksum', b.length - 1, 1, '0x' + b[b.length - 1].toString(16).padStart(2, '0'), '',
               csOk ? 'valid: sum(bytes 3..' + (b.length - 2) + ') mod 32' : 'INVALID'), { rawHex: BCS.hex(b.slice(b.length - 1)) }),
           ],

@@ -167,14 +167,15 @@ test('the mid-measurement record frame decodes its own weight', async () => {
 
 
 test('SSW532 (openScale offset-1) frames still decode alongside the SSW533', async () => {
-  // marker 0x07 at index 1, 0xA2 at index 3, stability 0x03, weight BE24 at 6
+  // The older three-byte header: command 0xA2 at index 3 rather than 4, state
+  // at 4, and a plain big-endian 24-bit weight rather than a packed word.
   const b = BCS.toBytes([0x01, 0x07, 0x00, 0xa2, 0x03, 0x00, 0x01, 0x80, 0xc4]);
   const ctx = makeCtx();
   await D.drTrust.init(ctx);
   const r = D.drTrust.onFrame(0xffb2, b, ctx);
   assert.ok(r, 'the older layout must still decode');
   assert.equal(r.values.weight, 98.5);
-  assert.equal(ctx.state.drt.weightOffset, 1);
+  assert.strictEqual(ctx.state.drt.wireVersion, 1, 'recognised as the older framing');
 });
 
 test('frames that are not ours are rejected rather than guessed at', async () => {
@@ -425,4 +426,52 @@ test('the device-info frame is acknowledged with its own package index', async (
   // And the user is declared again, as the SDK does after the introduction.
   assert.ok(ctx.calls.writes.some((w) => /user profile/.test(w.what)),
     'the profile is re-declared once the device has introduced itself');
+});
+
+/*
+ * The state byte was read backwards, and it is the most expensive mistake in
+ * this driver. The SDK maps it 1 = weighing, 2/3 = impedance sweep running —
+ * the P-1 display — and 4 = heart rate. This code called 3 "stable, final".
+ *
+ * So the instant the scale began the sweep every run was waiting for, the
+ * driver declared the weight final, latched it, suppressed what followed and
+ * closed the link. The measurement was being interrupted at the moment it
+ * started, and the silence that looked like "the scale never tried" was us.
+ */
+test('the impedance sweep is not mistaken for a finished weighing', async () => {
+  // A V2 live frame in state 3: packed weight 98.50 kg, sweep running.
+  const sweeping = '2f 00 07 00 a2 03 00 01 80 c4 00 00';
+  const { ctx, out } = await feed([sweeping]);
+
+  assert.strictEqual(out[0], D.SUPPRESS,
+    'a sweep frame must report nothing: it is not a reading, it is work in progress');
+  assert.strictEqual(ctx.state.drt.finalReported, false,
+    'and above all it must not latch a final weight');
+  assert.ok(ctx.calls.logs.some(([, m]) => /impedance sweep/i.test(m)),
+    'the run should say the sweep started, since that is what we have been waiting for');
+
+  // State 2 is the same phase.
+  const { out: out2 } = await feed(['2f 00 07 00 a2 02 00 01 80 c4 00 00']);
+  assert.strictEqual(out2[0], D.SUPPRESS);
+});
+
+test('the older framing keeps its own meaning for state 3', async () => {
+  // On the SSW532's three-byte header 0x03 means stable, and we have no
+  // vendor evidence to overrule that — only the V2 mapping is documented.
+  const b = BCS.toBytes([0x01, 0x07, 0x00, 0xa2, 0x03, 0x00, 0x01, 0x80, 0xc4]);
+  const ctx = makeCtx();
+  await D.drTrust.init(ctx);
+  const r = D.drTrust.onFrame(0xffb2, b, ctx);
+  assert.ok(r && r.values, 'still decodes');
+  assert.strictEqual(r.values.weight, 98.5);
+  assert.strictEqual(r.values.state, 'final', 'stable on V1, not a sweep');
+});
+
+test('the packed weight word is masked to its low 18 bits', async () => {
+  // The upper 14 bits are flags. A frame with them set must still read 98.50,
+  // where the old big-endian 24-bit read would return nonsense.
+  const withFlags = '2f 00 07 00 a2 01 fc 01 80 c4 00 00';
+  const { out } = await feed([withFlags]);
+  assert.ok(out[0] && out[0].values, 'decodes despite the flag bits');
+  assert.strictEqual(out[0].values.weight, 98.5, 'flags masked off, not read as weight');
 });
