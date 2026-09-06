@@ -81,7 +81,15 @@ const REAL = {
    * inventing one to make a test pass is what produced this mess.
    */
 };
-const feed = async (hexes) => {
+/*
+ * Frames, as they arrive on hardware.
+ *
+ * A record is preceded by the live weight stream, always: the scale uploads a
+ * stored record the moment the channel opens, and the driver ignores those, so
+ * a test that feeds a record cold is testing the history path by accident.
+ * `feed` therefore starts with someone stepping on unless told otherwise.
+ */
+const feedCold = async (hexes) => {
   const ctx = makeCtx();
   await D.drTrust.init(ctx);
   const out = [];
@@ -91,6 +99,14 @@ const feed = async (hexes) => {
     out.push(D.drTrust.onFrame(u, b, ctx));
   }
   return { ctx, out };
+};
+
+const feed = async (hexes) => {
+  const needsStepOn = hexes.some((h) => / a7 | a5 /.test(h));
+  if (!needsStepOn) return feedCold(hexes);
+  const r = await feedCold([REAL.rising, ...hexes]);
+  // Drop the step-on's own result so `out` still lines up with `hexes`.
+  return { ctx: r.ctx, out: r.out.slice(1) };
 };
 
 test('checksum rule sum(bytes 3..len-2) mod 32 holds for every real frame', () => {
@@ -535,4 +551,41 @@ test('a partial sweep is not forced into a segmental reading', async () => {
   const { out } = await feed([hex]);
   assert.deepStrictEqual(out[0].values.impedances.slice(0, 2), [300, 25]);
   assert.strictEqual(out[0].values.impedanceOhm, 325, 'falls back to the plain total');
+});
+
+/*
+ * The scale uploads whatever it has stored the moment the record channel
+ * opens — before anyone has stepped on, before the sweep, before the display
+ * shows P-1. Taking that as the reading is why every run after the first
+ * successful measurement returned that same first measurement, byte for byte,
+ * and why P-1 appeared to stop working when nothing in the write path had
+ * changed. It only started once the scale had something to dump.
+ */
+test('a record that arrives before anyone stands on the scale is history', async () => {
+  const stored = H.recordFrame({ weightKg: 97.55, impedances: [28, 324.8, 333.2, 321.3, 348.5, 25.7, 293.6, 298.9, 286.2, 316.1] });
+  const { ctx, out } = await feedCold([stored]);
+
+  assert.strictEqual(out[0], null, 'the history upload is not a measurement');
+  assert.strictEqual(ctx.state.drt.impedanceOhm, null, 'and nothing is captured from it');
+  assert.ok(ctx.calls.logs.some(([, m]) => /history upload|stored record/i.test(m)),
+    'the run says what it ignored, rather than going quiet');
+});
+
+test('the same record counts once someone is actually on the scale', async () => {
+  const stored = H.recordFrame({ weightKg: 97.55, impedances: [28, 324.8, 333.2, 321.3, 348.5, 25.7, 293.6, 298.9, 286.2, 316.1] });
+  const { out } = await feedCold([REAL.rising, stored]);
+
+  const r = out[1];
+  assert.ok(r && r.values, 'now it is a reading');
+  assert.strictEqual(r.values.weight, 97.55);
+  assert.strictEqual(r.values.impedanceOhm, 605.5);
+});
+
+test('the impedance sweep alone is proof enough that someone is on it', async () => {
+  // If the stream jumps straight to the sweep, that is a person on the plate.
+  const sweeping = '2f 00 07 00 a2 03 00 01 80 c4 00 00';
+  const stored = H.recordFrame({ weightKg: 98.5, impedances: H.segmentalFor(600) });
+  const { out } = await feedCold([sweeping, stored]);
+  assert.ok(out[1] && out[1].values.impedanceOhm > 0,
+    'a record after the sweep is a measurement, however the weight arrived');
 });

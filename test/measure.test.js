@@ -181,6 +181,9 @@ test('a granted scale connects with no chooser at all', async () => {
   const chooserBefore = h.state.chooserCalls;
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   assert.equal(h.state.chooserCalls, chooserBefore, 'no chooser was opened');
@@ -200,6 +203,9 @@ test('after a failed window it still recovers silently, without a chooser', asyn
   await sleep(150);
   assert.equal(h.state.chooserCalls, chooserBefore,
     'getDevices can supply the scale, so the chooser must stay shut');
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   assert.match(h.nodes.results.innerHTML, /98\.5 kg/);
@@ -212,6 +218,9 @@ test('the chooser is only used when nothing was ever granted', async () => {
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
   assert.equal(h.state.chooserCalls, 1, 'the one case that genuinely needs a pick');
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   h.stop();
@@ -247,6 +256,9 @@ test('a Chrome with no discovery at all still measures, and says what is missing
   await sleep(30);
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   assert.match(h.nodes.results.innerHTML, /98\.5 kg/);
@@ -313,6 +325,9 @@ test('the panel labels every number as measured, derived or approximate', async 
   await sleep(30);
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   h.emit('ffb3', FRAMES.impedance);
   await m;
@@ -329,6 +344,9 @@ test('an untrustworthy body fat figure is called out on the panel', async () => 
   await sleep(30);
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   h.emit('ffb3', FRAMES.impedanceBad);
   await m;
@@ -342,6 +360,9 @@ test('the scale is released after a measurement so it is free for the next one',
   await sleep(30);
   const m = h.nodes.btnMeasure.onclick();
   await sleep(120);
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   assert.ok(h.state.disconnectCalls >= 1, 'disconnected when done');
@@ -361,6 +382,9 @@ test('Measure retries while the scale is asleep, then succeeds when it wakes', a
   h.state.reachable = true;             // user steps on the scale
   for (let i = 0; i < 60 && !h.state.listeners.ffb3; i++) await sleep(100);
   assert.ok(h.state.listeners.ffb3, 'reconnected and re-subscribed once the scale woke');
+  // Someone stands on it first: a record before the live stream has
+  // spoken is the scale's history upload, and is ignored.
+  h.emit('ffb2', FRAMES.settling);
   h.emit('ffb3', FRAMES.record);
   await m;
   assert.match(h.nodes.results.innerHTML, /98\.5 kg/, 'measurement completed after the scale woke');
@@ -440,6 +464,9 @@ test('two measurements in a row both work', async () => {
     h.nodes.results.innerHTML = '';
     const m = h.nodes.btnMeasure.onclick();
     await sleep(120);
+    // Someone stands on it first: a record before the live stream has
+    // spoken is the scale's history upload, and is ignored.
+    h.emit('ffb2', FRAMES.settling);
     h.emit('ffb3', FRAMES.record);
     await m;
     assert.match(h.nodes.results.innerHTML, /98\.5 kg/, `measurement ${i + 1}`);

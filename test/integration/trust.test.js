@@ -85,6 +85,14 @@ function recordFixture(tag, impedanceTenths, grams) {
   return H.fixture(tag, [
     { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
     { t: 'ready' },
+    /*
+     * Someone stands on the scale first. A record that arrives before the live
+     * stream has said anything is the scale's history upload, which the driver
+     * ignores — so a fixture without this is exercising that path by accident
+     * rather than the case it is named for.
+     */
+    { t: 'frame', uuid: '0000ffb2-0000-1000-8000-00805f9b34fb',
+      hex: '2f 00 07 00 a2 01 00 01 13 32 00 09' },
     { t: 'frame',
       uuid: '0000ffb3-0000-1000-8000-00805f9b34fb',
       hex: H.recordFrame({ weightKg: grams / 1000,

@@ -181,7 +181,7 @@
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
         profileSent: false,
         handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
-        sweepSeen: false, wireVersion: null, lastRecord: null,
+        sweepSeen: false, wireVersion: null, lastRecord: null, liveWeighing: false,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -404,6 +404,7 @@
         if (v2 && (wireState === 2 || wireState === 3)) {
           if (!st.sweepSeen) {
             st.sweepSeen = true;
+            st.liveWeighing = true;
             ctx.log(`  Dr Trust: the scale has started its impedance sweep (state ${wireState}) — `
               + 'this is the P-1 phase. Holding the link open and staying out of its way.', 'ok');
           }
@@ -433,6 +434,8 @@
         } else if (!settled) {
           state = 'settling';
           st.onScale = true;
+          // Somebody is on the scale now, so a record from here on is theirs.
+          st.liveWeighing = true;
           st.weightKg = kg;
           /*
            * Nothing is written here.
@@ -456,6 +459,7 @@
           st.weightKg = kg;
           if (state === 'final') {
             st.finalKg = kg; st.finalReported = true;
+            st.liveWeighing = true;
             /*
              * Nothing is sent here any more.
              *
@@ -543,6 +547,32 @@
 
       // ---------------- measurement record, 0xA7 live / 0xA5 history --------
       if (cmdByte !== 0xa7 && cmdByte !== 0xa5) return null;
+
+      /*
+       * A record that arrives before anyone has stood on the scale is history,
+       * not a measurement.
+       *
+       * 0xFFB3 is the record channel, and this firmware uploads whatever it
+       * has stored as soon as that channel opens — before the weight stream
+       * has said anything, before the sweep, before the display shows P-1. We
+       * took that dump as the reading and completed on it, so every run after
+       * the first successful measurement returned that same first measurement:
+       * identical bytes, identical weight, and no P-1 because nothing was ever
+       * measured.
+       *
+       * It only began once the scale HAD something stored, which is why it
+       * looked like a regression in our code and was not.
+       *
+       * So a record counts only after the live stream has seen someone on the
+       * scale. The dump is still logged, because "the scale replayed its last
+       * reading" is worth knowing, but it is not the answer to this request.
+       */
+      if (!st.liveWeighing) {
+        ctx.log(`  Dr Trust: ignoring a stored record (command 0x${cmdByte.toString(16)}) `
+          + 'that arrived before anyone stood on the scale — this is its history upload, '
+          + 'not a measurement. Waiting for a live one.', 'warn');
+        return null;
+      }
       if (fragment !== 0) {
         ctx.log(`  Dr Trust: ignoring record fragment ${fragment}; reassembly is not implemented `
           + 'and no genuine frame has ever needed it.', 'warn');
