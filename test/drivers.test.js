@@ -306,52 +306,54 @@ test('the package index advances, because the scale de-duplicates on it', () => 
   assert.strictEqual(D.drTrust.nextPkg(st), 0, 'and wraps rather than overflowing the byte');
 });
 
-test('the profile asks for impedance, which is the only way to ask', async () => {
+/*
+ * Checked against a Bluetooth capture of the phone app talking to this exact
+ * scale. The whole session contains two writes:
+ *
+ *     handle 0x001d   0b 00 03 ...    8 bytes   a 3-byte 0xB0 reply
+ *     handle 0x001d   0c 00 1e ...   35 bytes   a 30-byte user info
+ *
+ * 0x001e is 30, and counting the writes in encodeUserInfo_C0 gives 24 fixed
+ * bytes plus a length-prefixed nickname: 24 + 6 = 30. Not 0xB8's 26, and not
+ * 0xBE's 23 — both of which this driver sent, and neither of which the app
+ * ever sends.
+ */
+test('the profile is the 30-byte 0xC0 frame the app actually sends', async () => {
   const writes = [];
   const ctx = {
-    state: { drt: { pkg: 0 } },
+    state: { drt: { pkg: 11 } },
     profile: () => ({ heightCm: 180, age: 39, sex: 'male' }),
     now: () => 1757155200000, log: () => {},
     write: async (s2, c, b, what) => { writes.push({ c, b: [...b], what }); return true; },
   };
-  // Declarations alternate between the two candidate commands, one per
-  // declaration, because the SDK sends a single user-info command each time.
-  await D.drTrust.writeProfile(ctx, 98.5);
   await D.drTrust.writeProfile(ctx, 98.5);
 
-  // Which command this scale wants depends on a device subtype we cannot read,
-  // so both candidates are tried. 0xB8 is 26 bytes and fragments; 0xBE is 23.
-  const b8 = writes.filter((w) => /0xB8/.test(w.what));
-  const be = writes.filter((w) => /0xBE/.test(w.what));
-  assert.strictEqual(b8.length, 2, '0xB8 is 26 bytes, so two fragments');
-  assert.strictEqual(be.length, 2, '0xBE is 23 bytes, so two fragments');
+  assert.strictEqual(writes.length, 1, 'one write, unfragmented: 35 bytes fits the MTU');
+  const { c, b, what } = writes[0];
+  assert.strictEqual(c, 0xffb1);
+  assert.strictEqual(b.length, 35, 'the length the phone sent');
+  assert.strictEqual((b[1] << 8) | b[2], 30, 'declared payload length 0x001e');
+  assert.strictEqual(b[3], 0x00, 'a single fragment');
+  assert.strictEqual(b[4], 0xc0, 'command 0xC0');
 
-  for (const [name, frags, len, cmd] of [['0xB8', b8, 26, 0xb8], ['0xBE', be, 23, 0xbe]]) {
-    const [first, second] = frags;
-    assert.strictEqual(first.c, 0xffb1, `${name}: the command channel`);
-    assert.strictEqual((first.b[1] << 8) | first.b[2], len, `${name}: total payload length`);
-    assert.strictEqual(first.b[3], 0x00, `${name}: fragment 0`);
-    assert.strictEqual(second.b[3], 0x01, `${name}: fragment 1`);
-    assert.strictEqual(first.b[0], second.b[0], `${name}: both fragments share a package index`);
-    assert.strictEqual((second.b[1] << 8) | second.b[2], len, `${name}: length repeats on each fragment`);
-    assert.strictEqual(first.b[4], cmd, `${name}: command byte at index 4`);
-    assert.strictEqual(first.b[12], 180, `${name}: height`);
-    assert.strictEqual((first.b[13] << 8) | first.b[14], 9850, `${name}: weight x100 big-endian`);
-    assert.strictEqual(first.b[15], 0x80 | 39, `${name}: sex bit and age`);
-    // Sign-magnitude UTC offset, never two's complement.
-    assert.strictEqual(first.b[10] & 0x80, 0, `${name}: a positive offset leaves bit 15 clear`);
-  }
+  assert.strictEqual(b[12], 180, 'height');
+  assert.strictEqual((b[13] << 8) | b[14], 9850, 'weight x100 big-endian');
+  assert.strictEqual(b[15], 0x80 | 39, 'male bit and age');
+  assert.strictEqual(b[10] & 0x80, 0, 'a positive UTC offset leaves the sign bit clear');
 
-  // The bitmask, which is the entire point: bit 0 is fun_open_imp. It sits at
-  // payload index 14 in 0xB8 and 16 in 0xBE.
-  assert.strictEqual(b8[0].b[4 + 14] & 0x01, 0x01, '0xB8 requests the impedance sweep');
-  assert.strictEqual(be[1].b[4 + (16 - 16)] & 0x01, 0x01, '0xBE requests the impedance sweep');
+  // Payload byte 16 — frame index 20 — is the function bitmask. Bit 0 is
+  // fun_open_imp, and it is the only request for a body-composition sweep
+  // anywhere in this protocol.
+  assert.strictEqual(b[4 + 16] & 0x01, 0x01, 'bit 0 asks for the impedance sweep');
 
-  // And the trailer covers that fragment's payload only.
-  for (const w of writes) {
-    const sum = w.b.slice(4, -1).reduce((a, x) => a + x, 0);
-    assert.strictEqual(w.b[w.b.length - 1] & 0x1f, sum & 0x1f, `${w.what}: trailer`);
-  }
+  // The tail is a length-prefixed nickname, which is what the packet this
+  // driver used to send as a separate "app name" always was.
+  assert.strictEqual(b[4 + 23], 6, 'nickname length');
+  assert.strictEqual(String.fromCharCode(...b.slice(4 + 24, 4 + 30)), 'icomon');
+
+  const sum = b.slice(4, -1).reduce((a, x) => a + x, 0);
+  assert.strictEqual(b[b.length - 1] & 0x1f, sum & 0x1f, 'trailer over the payload');
+  assert.match(what, /0xC0/);
 });
 
 test('a female profile clears the sex bit rather than always claiming male', async () => {

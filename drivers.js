@@ -199,9 +199,15 @@
         return;
       }
       await ctx.subscribe(0xffb0, 0xffb2);
-      ctx.log('  Dr Trust: declaring the user and requesting impedance.', 'ok');
-      await drTrust.writeProfile(ctx).catch((e) =>
-        ctx.log(`  Dr Trust: could not declare the user: ${e.message}`, 'warn'));
+      /*
+       * The user is NOT declared here.
+       *
+       * The capture of the phone app shows two writes in the whole session, in
+       * this order: a 3-byte 0xB0 reply, then the 30-byte user info. Both come
+       * after the scale has introduced itself, and the user info is sent once.
+       * Declaring at connect as well produced two declarations per session
+       * where the app sends one.
+       */
       ctx.log('Ready. Step on the scale.', 'ok');
     },
 
@@ -229,22 +235,37 @@
     /*
      * Declare the user, and ask for an impedance measurement.
      *
-     * Which command carries this depends on the device: the SDK picks it from
-     * deviceType = deviceSubType | 32, giving 0xB8 for 43, 0xBA for 40, and
-     * 0xBE or 0xC0 otherwise. We cannot read the subtype from here, so both
-     * plausible commands go out. A scale ignores a command it does not know,
-     * and one wasted 28-byte write costs far less than another trip to it.
+     * Command 0xC0, 30 payload bytes, ONE unfragmented write. This is not
+     * inferred: a Bluetooth capture of the phone app talking to this exact
+     * scale contains precisely two writes in the whole session —
      *
-     * The field that matters in both is the function bitmask, whose bit 0 is
-     * fun_open_imp. It is the only field in this protocol that asks for an
-     * impedance sweep; there is no start command.
+     *     handle 0x001d   0b 00 03 ...    8 bytes   a 3-byte 0xB0 reply
+     *     handle 0x001d   0c 00 1e ...   35 bytes   a 30-byte user info
      *
-     * The old 0xB8 payload was right field for field — a previous analysis
-     * confirmed it byte for byte against the vendor encoder, bitmask included.
-     * Its only fault was the three-byte header that put every field one place
-     * to the left. So it is sent again here, correctly framed, as two
-     * fragments: the "app name" packet was never a handshake step but the tail
-     * of this very message, carrying the nickname.
+     * — and 0x001e is 30. Counting the writes in
+     * ICBleScaleGeneralProtocolV2::encodeUserInfo_C0 (libICBleProtocol.so
+     * @0x13e208, command byte at 0x13eb50) gives 24 fixed bytes plus a
+     * length-prefixed nickname; with "icomon" that is exactly 30.
+     *
+     * Two things this corrects beyond the command byte. The app declares the
+     * user ONCE per session, not at every opportunity. And it sends the whole
+     * payload in a single write: 35 bytes fits the negotiated MTU, so the
+     * 16-byte fragmentation was wrong as well.
+     *
+     *   [0]      0xC0
+     *   [1..4]   unix time, big-endian
+     *   [5..6]   UTC offset in minutes, sign-magnitude
+     *   [7]      user index
+     *   [8]      height in cm
+     *   [9..10]  weight x100
+     *   [11]     age, 0x80 set for male
+     *   [12..13] target weight x100
+     *   [14..15] start weight x100
+     *   [16]     function bitmask — bit 0 is fun_open_imp
+     *   [17..20] user id
+     *   [21..22] reserved
+     *   [23]     nickname length
+     *   [24..]   nickname
      */
     async writeProfile(ctx, weightKg) {
       const prof = ctx.profile() || {};
@@ -255,52 +276,32 @@
       const declaredKg = Math.min(300, Math.max(10, weightKg || prof.weightKg || 60));
       const dw = Math.round(declaredKg * 100);
 
-      /*
-       * The UTC offset is sign-magnitude, not two's complement: bit 15 marks a
-       * negative offset and the low bits carry its size. Writing -300 as
-       * 0xFED4 would read as a +32468 minute offset west of nowhere.
-       */
+      // Sign-magnitude, not two's complement: bit 15 marks a negative offset.
       const tzMin = -new Date().getTimezoneOffset();
       const tz = (tzMin < 0 ? 0x8000 : 0) | (Math.abs(tzMin) & 0x7fff);
 
-      // bit0 impedance, bit1 balance, bit2 heart rate, bit3 gravity.
+      // bit0 impedance, bit1 balance, bit2 heart rate, bit3 gravity. Bit 0 is
+      // the only thing in this protocol that asks for a body-composition sweep.
       const FUNCTIONS = 0x0f;
       const be16 = (v) => [(v >> 8) & 0xff, v & 0xff];
       const be32 = (v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
-      const sexAge = (male ? 0x80 : 0x00) | age;
-      const who = `${h} cm, ${age}y, ${male ? 'male' : 'female'}, declared ${declaredKg} kg`;
+      const NICK = [0x69, 0x63, 0x6f, 0x6d, 0x6f, 0x6e];             // "icomon"
 
-      /*
-       * Target and start weight are both set to the declared weight. Two
-       * independent readings of the encoder disagreed on which of the pairs at
-       * payload 12-15 is which; making them equal removes the question.
-       */
-      const b8 = [
-        0xb8, ...be32(ts), ...be16(tz), 0x01, h, ...be16(dw), sexAge,
-        ...be16(dw), FUNCTIONS, 0x00, 0x00, 0x00, 0x00,
-        0x06, 0x69, 0x63, 0x6f, 0x6d, 0x6f, 0x6e,          // nickname "icomon"
-      ];
-      const be = [
-        0xbe, ...be32(ts), ...be16(tz), 0x01, h, ...be16(dw), sexAge,
+      const payload = [
+        0xc0, ...be32(ts), ...be16(tz), 0x01, h,
+        ...be16(dw), (male ? 0x80 : 0x00) | age,
         ...be16(dw), ...be16(dw), FUNCTIONS, ...be32(1), 0x00, 0x00,
+        NICK.length, ...NICK,
       ];
+      if (payload.length !== 30) {
+        ctx.log(`  Dr Trust: profile payload is ${payload.length} bytes, expected 30.`, 'warn');
+      }
 
-      /*
-       * One command per declaration, alternating.
-       *
-       * The SDK declares the user twice — once when the notifications are up,
-       * once after the device introduces itself — and sends a single command
-       * each time. Sending both candidates at both points made eight frames
-       * where the app sends four, so each declaration carries one: 0xB8 first,
-       * 0xBE second. Both get tried, and the scale sees the traffic volume it
-       * expects rather than a burst.
-       */
+      const what = `user profile 0xC0 (${h} cm, ${age}y, ${male ? 'male' : 'female'},`
+        + ` declared ${declaredKg} kg, impedance requested)`;
       const st = ctx.state.drt;
-      const useB8 = (st.declarations || 0) % 2 === 0;
-      st.declarations = (st.declarations || 0) + 1;
-      await (useB8
-        ? drTrust.writeMessage(ctx, b8, `user profile 0xB8 (${who}, impedance requested)`)
-        : drTrust.writeMessage(ctx, be, `user profile 0xBE (${who}, impedance requested)`));
+      st.handshakeDone = true;
+      await ctx.write(0xffb0, 0xffb1, drTrust.packet(payload, drTrust.nextPkg(st)), what);
     },
 
     /*
@@ -510,13 +511,18 @@
         ctx.log(`  Dr Trust: device info (command 0x${b[m2].toString(16)}), package `
           + `0x${pkg.toString(16)} — acknowledging and re-declaring the user.`, 'ok');
 
+        /*
+         * Acknowledge, then declare the user once — the order the capture
+         * shows, with the reply carrying package index 0x0b and the user info
+         * 0x0c immediately after it.
+         */
         Promise.resolve(drTrust.ack(ctx, pkg))
-          .catch((e) => ctx.log(`  Dr Trust: could not acknowledge: ${e.message}`, 'warn'));
-        if (!st.profileSent) {
-          st.profileSent = true;
-          Promise.resolve(drTrust.sendProfile(ctx, st.weightKg || undefined))
-            .catch((e) => ctx.log(`  Dr Trust: re-declaring the user failed: ${e.message}`, 'warn'));
-        }
+          .then(() => {
+            if (st.profileSent) return null;
+            st.profileSent = true;
+            return drTrust.sendProfile(ctx, st.weightKg || undefined);
+          })
+          .catch((e) => ctx.log(`  Dr Trust: handshake failed: ${e.message}`, 'warn'));
         return {
           characteristic: 'Dr Trust session setup', spec: 'Dr Trust vendor protocol',
           raw: BCS.hex(b), units: '', flagBits: [], warnings: [],
