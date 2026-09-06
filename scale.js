@@ -353,6 +353,7 @@ function measureOnce(opts) {
     };
     if (opts.registerChild) opts.registerChild(py);
 
+    let secondWait = null;
     const capture = { weight: null, impedance: null, impedancePlausible: false,
                       waitedForProgram: false, finalSeen: false, frames: 0, settled: false };
     let device = null, identified = null, driver = null, ctx = null, grace = null, finished = false;
@@ -449,7 +450,42 @@ function measureOnce(opts) {
       // Only a plausible impedance ends the measurement. An implausible one is
       // the placeholder the scale sends before its program has run.
       if (capture.weight > 0 && capture.impedance > 0 && capture.impedancePlausible) {
-        return complete('weight and impedance');
+        /*
+         * Do not hang up the moment the impedance lands.
+         *
+         * The scale runs a SECOND program after the body-composition sweep —
+         * the display shows P-1 and then L-1 — and the phone app stays
+         * connected through both. We were completing on the first record and
+         * closing the link, so the second program never got the chance to
+         * start. It is the same fault as the old five-second grace that cut
+         * off P-1, one stage later.
+         *
+         * So the link CAN be held open once more, for whatever the scale sends
+         * next: a heart rate, a refined record, or nothing.
+         *
+         * Off by default. What the second program produces has not been
+         * established, and twenty seconds added to every measurement is a real
+         * cost to pay for an unverified benefit. Set secondProgramWaitSec on a
+         * request, or --second-program on the CLI, to find out what arrives.
+         */
+        const waitSec = Number(opts.secondProgramWaitSec || 0);
+        if (waitSec > 0 && !capture.secondProgram) {
+          capture.secondProgram = true;
+          const waitMs = waitSec * 1000;
+          note(`  body composition captured. Staying connected for up to ${Math.round(waitMs / 1000)} s`);
+          note('  in case the scale runs its second program. Stay on it and keep holding.');
+          emit({ _hint: true, code: 'SECOND_PROGRAM', count: 1, afterMs: 0,
+                 message: 'Body composition recorded. Stay on the scale a few seconds '
+                        + 'longer while it finishes.' });
+          secondWait = setTimeout(() => complete('weight and impedance'), waitMs);
+          return undefined;
+        }
+        // Waiting is off, or a later record arrived during the wait. Either
+        // way the reading is complete; a heart rate, if one came, is carried.
+        if (secondWait) { clearTimeout(secondWait); secondWait = null; }
+        return complete(capture.heartRate > 0
+          ? 'weight, impedance and heart rate'
+          : 'weight and impedance');
       }
       if (capture.finalSeen && capture.weight > 0 && !grace) {
         /*

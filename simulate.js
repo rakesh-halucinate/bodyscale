@@ -331,22 +331,60 @@ async function main() {
   }
 
   /*
-   * The scale is handed a placeholder, and the real details are asked for
-   * afterwards.
+   * Who the scale is told it is measuring, remembered between runs.
    *
-   * This used to prompt up front, on the reasoning that an 8-electrode scale
-   * decides whether to run its sweep from the identity it is given during the
-   * handshake. The first half of that is true; the conclusion was not. The
-   * scale needs a WELL-FORMED profile with the impedance bit set, and it has
-   * run its sweep every time since with a declared weight of 60 kg, which
-   * nobody here weighs. What it wants is a valid frame, not a true one.
+   * This went through two wrong designs before this one. Asking up front, every
+   * time, made someone fill in a form before they could stand on a scale. Then
+   * sending a pure placeholder — 170 cm, 30 years — stopped the sweep running
+   * at all: the scale replayed its stored record instead of measuring, giving
+   * back a reading identical to the previous one down to the weight.
    *
-   * So the deferred flow the app actually needs is restored: press the button,
-   * step on, and enter your details once the reading is latched. Nothing about
-   * the measurement depends on answering first, and a person standing on a
-   * scale should not be filling in a form.
+   * So the identity is real but asked for at most once. It is written to the
+   * scale during the handshake, and updated from whatever is entered after a
+   * reading, which is where the details belong. The measurement itself is still
+   * deferred: nothing is computed until the details are given.
    */
-  const who = null;
+  const WHO_FILE = require('path').join(ROOT, 'logs', 'profile.json');
+  const readWho = () => {
+    try {
+      const w = JSON.parse(require('fs').readFileSync(WHO_FILE, 'utf8'));
+      if (w && w.sex && w.age > 0 && w.heightCm > 0) return w;
+    } catch (e) { /* first run, or unreadable */ }
+    return null;
+  };
+  const saveWho = (w) => {
+    try {
+      require('fs').mkdirSync(require('path').dirname(WHO_FILE), { recursive: true });
+      require('fs').writeFileSync(WHO_FILE, JSON.stringify(w, null, 2) + '\n');
+    } catch (e) { /* not being able to remember is not worth failing over */ }
+  };
+
+  let who = readWho();
+  if (who) {
+    say('');
+    say(`  ${C.dim}measuring ${who.heightCm} cm, ${who.age}y, ${who.sex} `
+      + `— remembered, and sent to the scale before you step on${C.off}`);
+  } else {
+    say('');
+    say(`  ${C.bold}Who is the scale measuring?${C.off}`);
+    say(`  ${C.dim}Asked once. The scale needs a real identity during the handshake or it${C.off}`);
+    say(`  ${C.dim}replays its last record instead of measuring. Remembered from here on.${C.off}`);
+    who = {
+      sex: await askValid(`  Sex ${C.dim}[male]${C.off} `, {
+        parse: (v) => v.toLowerCase(), fallback: 'male',
+        valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
+      }),
+      age: await askValid('  Age  ', {
+        parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
+        hint: 'Enter an age between 5 and 120.',
+      }),
+      heightCm: await askValid('  Height in cm  ', {
+        parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
+        hint: 'Enter a height between 90 and 250 cm.',
+      }),
+    };
+    saveWho(who);
+  }
 
   for (;;) {
     // ---------------------------------------------------------------- IDLE
@@ -382,8 +420,12 @@ async function main() {
         // The scale runs its impedance program after the weight locks. Hanging
         // up before it finishes is what produced weight-only readings.
         impedanceWaitSec: Number(arg('--impedance-wait', 30)),
-        // No scaleProfile: the driver sends its own placeholder, which is all
-        // the scale needs to start measuring.
+        // Off unless asked for: the scale runs a second program after the
+        // body-composition sweep, and what it produces is not yet known.
+        secondProgramWaitSec: Number(arg('--second-program', 0)),
+        // Written to the scale during the handshake, and used for nothing
+        // else: the reading stays deferred until details are entered below.
+        scaleProfile: who,
       });
     } catch (err) {
       clearLive();
@@ -408,23 +450,27 @@ async function main() {
     say(`  ${C.dim}nothing is re-read until you press Measure Me again.${C.off}`);
     say('');
 
-    const sex = await askValid(`  Sex ${C.dim}[male]${C.off} `, {
-      parse: (v) => v.toLowerCase(), fallback: 'male',
+    const sex = await askValid(`  Sex ${C.dim}[${who.sex}]${C.off} `, {
+      parse: (v) => v.toLowerCase(), fallback: who.sex,
       valid: (v) => v === 'male' || v === 'female',
       hint: 'Enter male or female.',
     });
-    const age = await askValid('  Age  ', {
-      parse: Number,
+    const age = await askValid(`  Age ${C.dim}[${who.age}]${C.off} `, {
+      parse: Number, fallback: who.age,
       valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
       hint: 'Enter an age between 5 and 120.',
     });
-    const heightCm = await askValid('  Height in cm  ', {
-      parse: Number,
+    const heightCm = await askValid(`  Height in cm ${C.dim}[${who.heightCm}]${C.off} `, {
+      parse: Number, fallback: who.heightCm,
       valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
       hint: 'Enter a height between 90 and 250 cm.',
     });
 
     // ------------------------------------------------------------- RESULT
+    // What was just entered is who the scale measures next time.
+    who = { sex, age, heightCm };
+    saveWho(who);
+
     state('COMPUTING', 'no radio, no waiting');
     try {
       const result = await client.compute(

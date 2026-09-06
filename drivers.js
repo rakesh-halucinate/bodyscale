@@ -181,7 +181,7 @@
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
         profileSent: false,
         handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
-        sweepSeen: false, wireVersion: null,
+        sweepSeen: false, wireVersion: null, lastRecord: null,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -687,6 +687,26 @@
         res.warnings.push(`Frame is ${b.length} bytes but declares a ${payloadLen}-byte payload `
           + `(expected ${payloadLen + 5}).`);
       }
+
+      /*
+       * Say when the scale is repeating itself.
+       *
+       * Given a profile it does not accept, this firmware does not refuse — it
+       * hands back its stored record. That came back identical to the previous
+       * reading down to the weight, 97.55 kg and all ten impedances, and
+       * nothing on screen distinguished it from a fresh measurement. A stale
+       * number presented as a new one is worse than an error.
+       */
+      const signature = `${grams}:${impedances.join(',')}`;
+      if (count > 0 && signature === st.lastRecord) {
+        res.warnings.push('This record is identical to the previous one, down to the weight '
+          + 'and every impedance value. The scale replayed what it had stored rather than '
+          + 'measuring: its display would not have shown P-1. Step off, wait for it to clear, '
+          + 'and measure again.');
+        ctx.log('  Dr Trust: this record repeats the last one exactly — the scale replayed '
+          + 'stored data instead of measuring.', 'warn');
+      }
+      st.lastRecord = signature;
 
       if (kg > 0) st.weightKg = kg;
       if (ohm > 0) {
