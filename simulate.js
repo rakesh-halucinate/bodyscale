@@ -148,7 +148,7 @@ const SHOW = [
   ['proteinMassKg', 'Protein'], ['proteinPercent', 'Protein rate'],
   ['bmi', 'BMI'], ['bmiCategoryWho', 'BMI category'],
   ['bmiCategoryAsiaPacific', 'BMI category (Asia-Pacific)'],
-  ['bmrKcal', 'BMR'],
+  ['bmrKcal', 'BMR'], ['visceralFatRating', 'Visceral fat'],
   ['idealWeightRangeKg', 'Ideal weight'], ['healthyWeightRangeKg', 'Healthy range'],
   ['weightAboveHealthyRangeKg', 'Above healthy range'],
   ['bodyFatPercentBmiAnchor', 'Body fat (BMI method)'],
@@ -206,7 +206,13 @@ function renderResult(m) {
   say('');
   if (hasVendor) say(`  ${C.dim}${''.padEnd(W)}${'computed'.padEnd(15)}your app${C.off}`);
   for (const [key, label] of SHOW) {
-    if (!(key in m.derived)) continue;
+    // A row may exist only in the vendor column — visceral fat is computed
+    // from the vendor's own formula and has no clinical counterpart.
+    if (!(key in m.derived) && typeof vm[key] !== 'number') continue;
+    if (!(key in m.derived)) {
+      say(`  ${label.padEnd(W)}${C.dim}${'—'.padEnd(15)}${C.off}${C.cyan}${vm[key]}${C.off}`);
+      continue;
+    }
     const unit = m.units[key] ? ' ' + m.units[key] : '';
     const soft = m.confidence[key] === 'derived-vendor-convention';
     const value = `${m.derived[key]}${unit}`;

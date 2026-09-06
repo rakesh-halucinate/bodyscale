@@ -100,9 +100,12 @@
   /* Metrics on real consumer panels that are deliberately not computed. Printing
      an invented number is worse than printing nothing, so the reason ships too. */
   const OMITTED = {
-    visceralFatRating: 'No peer-reviewed formula exists, and vendor implementations differ by about a factor of two. '
-      + 'A foot-to-foot current path runs leg to pelvis to leg and largely bypasses the abdominal viscera, so every '
-      + 'vendor visceral fat number is a function of weight, height, age and sex only. It contains no impedance information.',
+    visceralFatRating: 'No peer-reviewed formula exists and vendor implementations differ by '
+      + 'about a factor of two, so this panel will not invent a general one. The figure THIS scale '
+      + 'shows is reproduced exactly in `vendorMatch.visceralFatRating`, extracted from its own '
+      + 'binary: a rating from 1 to 20, computed from fat mass and lean mass and containing no '
+      + 'impedance information beyond what those already carry. Reporting it here, as though it '
+      + 'were a measurement rather than one manufacturer\'s index, would still be wrong.',
     metabolicAgeYears: 'Both published conventions failed checking. The body-fat-band method is unreproducible from its '
       + 'source, and the BMI-regression method saturates its own clamps across the whole realistic input range, so it '
       + 'returns a constant while looking like a measurement.',
@@ -368,6 +371,48 @@
         proteinBasis: 'fat-free mass minus water minus bone, the four-compartment '
                     + 'remainder. Reads about 2% low against the app, whose bone and '
                     + 'mineral terms differ by 11%.',
+
+        /*
+         * Visceral fat, lifted out of the vendor's own binary.
+         *
+         *   raw  = 0.502 * fatMass - 0.029 * fatFreeMass - 0.477
+         *   vfal = min(20, max(1, trunc(raw)))
+         *
+         * From ICBodyFatAlgorithmWLA37::calc in libICBodyFatAlgorithms.so: the
+         * three coefficients are doubles at file offsets 0x2b8c8, 0x2adb0 and
+         * 0x2a488; the arithmetic is the fmul/fmadd/fadd at 0x9999c-0x999cc;
+         * fcvtzs at 0x999d4 truncates toward zero; the clamp is the csel/csinc
+         * pair at 0x999e8-0x999f4. The result lands at +0x20 in the result
+         * struct, which native_calc labels "vfal".
+         *
+         * Checked by RUNNING the library, not by reading it: an ELF loader
+         * executed this .so natively and compared the formula against its own
+         * output over 12,939 randomised inputs with no mismatch. For this
+         * reading it gives 17.72 -> 17, and the scale displays 17.
+         *
+         * IT IS A RATING FROM 1 TO 20, NOT A PERCENTAGE. A scale showing "17"
+         * means level 17, and the clamp means 20 is a ceiling, not a maximum
+         * anyone has measured.
+         *
+         * Two limits. This is WLA37, selected by bfa_type 36, which is what
+         * this scale reports and the only one of forty-one that reproduces all
+         * four of its displayed values; another model may use a different one.
+         * And the vendor rounds fat mass and fat percent separately, so
+         * recovering the mass from a one-decimal percentage is lossy — end to
+         * end that moves the rating by one in about one reading in seven
+         * hundred, and it cannot be avoided without the unrounded fraction,
+         * which the scale does not send.
+         */
+        visceralFatRating: (() => {
+          const bfm = round(W - ffm, 1);
+          const v = 0.502 * bfm - 0.029 * round(ffm, 1) - 0.477;
+          return Math.min(20, Math.max(1, Math.trunc(v)));
+        })(),
+        visceralFatBasis: 'ICBodyFatAlgorithmWLA37::calc, extracted from the vendor '
+                        + 'library and checked by executing it. A rating from 1 to 20, '
+                        + 'not a percentage. May differ from the scale by 1 in roughly '
+                        + '1 reading in 700, because fat mass must be recovered from a '
+                        + 'rounded percentage.',
 
         /*
          * Fitted to one reading, then DISPROVEN by a second.

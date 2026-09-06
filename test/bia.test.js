@@ -62,3 +62,49 @@ test('the vendor conventions that close exactly, still close exactly', () => {
     'skeletal muscle is named as unresolved rather than guessed at');
   assert.strictEqual(vm.skeletalMuscleMassKg, undefined);
 });
+
+/*
+ * Visceral fat, extracted from ICBodyFatAlgorithmWLA37::calc in the vendor's
+ * own libICBodyFatAlgorithms.so and checked by executing that library against
+ * 12,939 randomised inputs with no mismatch.
+ *
+ *   raw  = 0.502 * fatMass - 0.029 * fatFreeMass - 0.477
+ *   vfal = min(20, max(1, trunc(raw)))
+ *
+ * It is a RATING FROM 1 TO 20, not a percentage. This file previously refused
+ * to compute it at all, on the grounds that no peer-reviewed formula existed —
+ * which was true of the general quantity and irrelevant to the question the
+ * user was asking, which was what THEIR scale shows.
+ */
+test('visceral fat reproduces the rating the scale displays', () => {
+  const r = BIA.estimate({ weightKg: 97.6, impedanceOhm: 606.4, heightCm: 180, age: 39, sex: 'male' });
+  assert.strictEqual(r.vendorMatch.visceralFatRating, 17, 'the scale shows 17');
+});
+
+test('the visceral rating is an integer clamped to 1..20', () => {
+  // Only readings that survive the trust checks carry a vendorMatch at all,
+  // so these inputs are ones the rules accept.
+  const at = (weightKg, impedanceOhm) => {
+    const vm = BIA.estimate({ weightKg, impedanceOhm, heightCm: 180, age: 39, sex: 'male' }).vendorMatch;
+    assert.ok(vm, `${weightKg} kg at ${impedanceOhm} Ω should produce a vendor panel`);
+    return vm.visceralFatRating;
+  };
+
+  const ladder = [[70, 520], [75, 500], [97.6, 606.4], [160, 800]];
+  const ratings = ladder.map(([w, z]) => at(w, z));
+
+  for (const v of ratings) {
+    assert.ok(Number.isInteger(v), `${v} is an integer rating, not a percentage`);
+    assert.ok(v >= 1 && v <= 20, `${v} is inside the 1..20 clamp`);
+  }
+
+  // Rises with fatness rather than moving arbitrarily.
+  for (let i = 1; i < ratings.length; i += 1) {
+    assert.ok(ratings[i] >= ratings[i - 1],
+      `rating must not fall as fatness rises: ${ratings.join(' -> ')}`);
+  }
+
+  // The top is a ceiling the clamp imposes, not a maximum anyone measured —
+  // which is the whole reason this must not be shown as a percentage.
+  assert.strictEqual(at(160, 800), 20, 'a very high fat mass saturates at 20');
+});
