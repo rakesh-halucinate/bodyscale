@@ -42,7 +42,29 @@ const C = process.stdout.isTTY
       cyan: '\x1b[36m', green: '\x1b[32m', amber: '\x1b[33m', red: '\x1b[31m' }
   : { dim: '', bold: '', off: '', cyan: '', green: '', amber: '', red: '' };
 
-const say = (s = '') => process.stdout.write(s + '\n');
+/*
+ * Every session is written to a file as well as the screen.
+ *
+ * Diagnosing this scale has meant repeatedly asking the user to copy terminal
+ * output back by hand, which is tedious for them and loses exactly the detail
+ * that matters when it gets truncated. The log costs nothing and means a run
+ * can be read after the fact.
+ */
+const LOG_DIR = require('path').join(__dirname, 'logs');
+let LOG_FILE = null;
+try {
+  require('fs').mkdirSync(LOG_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  LOG_FILE = require('path').join(LOG_DIR, `session-${stamp}.log`);
+} catch (e) { LOG_FILE = null; }
+
+const strip = (t) => t.replace(/\x1b\[[0-9;]*m/g, '');
+function record(text) {
+  if (!LOG_FILE) return;
+  try { require('fs').appendFileSync(LOG_FILE, strip(text) + '\n'); } catch (e) { LOG_FILE = null; }
+}
+
+const say = (s = '') => { record(s); process.stdout.write(s + '\n'); };
 const rule = () => say(C.dim + '─'.repeat(66) + C.off);
 const state = (name, detail) =>
   say(`\n${C.cyan}${C.bold}[${name}]${C.off}${detail ? ' ' + C.dim + detail + C.off : ''}`);
@@ -162,6 +184,7 @@ async function main() {
   say(`${C.bold}Body scale — Electron flow rehearsal${C.off}`);
   say(C.dim + 'The same service, the same client, the same protocol the app will use.' + C.off);
   if (REPLAY) say(C.amber + 'Replaying a recorded session: no Bluetooth is involved.' + C.off);
+  if (LOG_FILE) say(C.dim + 'saving this session to ' + require('path').relative(ROOT, LOG_FILE) + C.off);
   rule();
 
   const client = new BodyScaleClient({ scaleDir: ROOT, replay: REPLAY });
