@@ -506,10 +506,17 @@ test('ten impedances are read as two segmental groups, not summed', async () => 
   assert.deepStrictEqual(r.values.impedances, REAL_TEN, 'every slot is reported raw');
   assert.strictEqual(r.values.impedanceCount, 10);
 
-  // Hand to foot down one side: one arm, the trunk, one leg. Summing all ten
-  // walks every limb twice and gave 2581 Ω — outside any physical band, so the
-  // trust rules discarded the entire reading and nothing was computed.
-  assert.strictEqual(r.values.impedanceOhm, 673.5);
+  /*
+   * Hand to foot down one side of the SECOND group: one arm, the trunk, one
+   * leg. Checked against the scale's own display for this reading — it shows
+   * 40.7 % fat and 54 kg muscle, which imply 606.8 and 618.9 Ω. Group 2 gives
+   * 606.4 and reproduces both; group 1 gives 674.7 and reproduces neither.
+   *
+   * Summing all ten, which came before this, walked every limb twice and gave
+   * 2581 Ω — outside any physical band, so the trust rules discarded the whole
+   * reading and the panel came back empty.
+   */
+  assert.strictEqual(r.values.impedanceOhm, 605.2);
   assert.notStrictEqual(r.values.impedanceOhm, 2581.1);
 
   // And it now survives the plausibility band, which is the whole point.

@@ -41,7 +41,7 @@ const FFB3 = '0000ffb3-0000-1000-8000-00805f9b34fb';
 const RECORD_FRAME = '30 00 23 00 a7 00 00 00 00 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 00 '
   + '00 00 00 00 00 00 00 00 00 00 00 00 00 00 08';
 /** The single 0xA7 record: 97.9 kg and ten impedance slots summing to 529.9 ohm. */
-const IMPEDANCE_FRAME = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 01 09 09 d5 0a 21 09 d5 0a 53 00 f4 09 0c 09 52 09 0c 09 80 00 00 00 00 13';
+const IMPEDANCE_FRAME = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 01 20 0a b0 0b 02 0a b0 0b 39 01 09 09 d5 0a 21 09 d5 0a 53 00 00 00 00 17';
 /** A 0xFFB2 live-weight frame: status 0x01 (settling), 69.25 kg. */
 const SETTLING_FRAME = '3e 00 07 00 a2 01 00 01 0e 82 00 14';
 
@@ -505,7 +505,7 @@ test('INT-PROG-23  a locked weight is frozen and later drift is ignored', async 
 // side that looks like "the Bluetooth disconnects as soon as it has the
 // weight", and it guaranteed a weight-only reading no decode fix could rescue.
 test('INT-PROG-24  the link is held open while the scale measures impedance', async () => {
-  const IMPEDANCE = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 01 09 09 d5 0a 21 09 d5 0a 53 00 f4 09 0c 09 52 09 0c 09 80 00 00 00 00 13'
+  const IMPEDANCE = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 01 20 0a b0 0b 02 0a b0 0b 39 01 09 09 d5 0a 21 09 d5 0a 53 00 00 00 00 17'
     + ' 00'.repeat(27) + ' 02';
   const f = H.fixture('late-impedance', [
     { t: 'log', level: 'info', msg: 'scanning for SSW533' },

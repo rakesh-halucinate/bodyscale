@@ -284,7 +284,12 @@ module.exports.segmentalFor = function segmentalFor(wholeBodyOhm) {
   const limb = r2((wholeBodyOhm - trunk) / 2);
   // rightArm and rightLeg carry the path; the left side differs slightly, as
   // it does in a real body.
-  const group = [trunk, limb, r2(limb * 1.03), limb, r2(limb * 1.05)];
-  const second = group.map((v) => r2(v * 0.92));
-  return [...group, ...second];
+  //
+  // The SECOND group carries `wholeBodyOhm`, because that is the one the
+  // driver reads: on real hardware the two groups differ by about 10% and the
+  // second reproduces the scale's own body-fat figure. The first is built
+  // around it at the ratio the hardware shows.
+  const target = [trunk, limb, r2(limb * 1.03), limb, r2(limb * 1.05)];
+  const first = target.map((v) => r2(v / 0.92));
+  return [...first, ...target];
 };

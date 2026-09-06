@@ -595,23 +595,37 @@
        * produced 2581 ohm: outside any physical band, so the trust rules threw
        * the whole reading away.
        *
-       * PROVISIONAL: the order within a group is inferred from the magnitudes,
-       * not read out of the vendor code, and which group is which frequency is
-       * unknown. The first group is used. Every derived value carries a warning
-       * until these numbers have been checked against the vendor app's own.
+       * WHICH group matters, and it is the second one.
+       *
+       * Both groups are segmental sets, but their limb values differ by about
+       * 10% — almost certainly two frequencies. Checked against the scale's
+       * own display for a 97.7 kg reading:
+       *
+       *   scale shows 40.7 % fat    -> implies 606.8 Ω
+       *   scale shows 54 kg muscle  -> implies 618.9 Ω
+       *   group 1 hand-to-foot          674.7 Ω  -> 44.1 % fat, 51.4 kg muscle
+       *   group 2 hand-to-foot          606.4 Ω  -> 40.7 % fat, 54.7 kg muscle
+       *
+       * Group 2 reproduces the body-fat figure exactly, and the muscle mass
+       * follows from it without being fitted — one number was matched and the
+       * other agreed on its own, which is what makes this a confirmation
+       * rather than a curve fit.
+       *
+       * Still inferred: the order WITHIN a group comes from the magnitudes,
+       * not from the vendor code. Only the whole-body path is corroborated.
        */
-      const group = measured.length >= 5 ? measured.slice(0, 5) : measured;
+      const group = measured.length >= 10 ? measured.slice(5, 10)
+        : (measured.length >= 5 ? measured.slice(0, 5) : measured);
       let segments = null;
       let ohm = 0;
       if (group.length === 5) {
-        const [trunk, ...limbs] = group;
-        limbs.sort((a, b) => a - b);
+        const [trunk] = group;
         segments = {
           trunk,
-          limbs: group.slice(1),
-          // Hand to foot down one side: the path the classic equations assume.
           rightArm: group[1], leftArm: group[2], rightLeg: group[3], leftLeg: group[4],
+          all: measured,
         };
+        // Hand to foot down one side: the path the equations assume.
         ohm = group[1] + trunk + group[3];
       } else {
         ohm = measured.reduce((a, v) => a + v, 0);
