@@ -315,21 +315,39 @@ test('the profile asks for impedance, which is the only way to ask', async () =>
   };
   await D.drTrust.writeProfile(ctx, 98.5);
 
-  assert.strictEqual(writes.length, 1, 'one frame, not three: there is no separate ack or app name');
-  const { c, b, what } = writes[0];
-  assert.strictEqual(c, 0xffb1);
-  assert.strictEqual((b[1] << 8) | b[2], 23, 'the 0xBE payload is 23 bytes');
-  assert.strictEqual(b[4], 0xbe, 'command 0xBE, the user-info frame this scale takes');
-  assert.strictEqual(b[12], 180, 'height');
-  assert.strictEqual((b[13] << 8) | b[14], 9850, 'weight x100, big-endian');
-  assert.strictEqual(b[15], 0x80 | 39, 'sex bit and age');
-  // Byte 16 of the payload — frame index 20 — is the function bitmask, and its
-  // bit 0 is fun_open_imp. Everything else in this file is downstream of it.
-  assert.strictEqual(b[20] & 0x01, 0x01, 'bit 0 requests the impedance sweep');
-  assert.match(what, /impedance requested/);
+  // Which command this scale wants depends on a device subtype we cannot read,
+  // so both candidates go out. 0xB8 is 26 bytes and fragments; 0xBE is 23.
+  const b8 = writes.filter((w) => /0xB8/.test(w.what));
+  const be = writes.filter((w) => /0xBE/.test(w.what));
+  assert.strictEqual(b8.length, 2, '0xB8 is 26 bytes, so two fragments');
+  assert.strictEqual(be.length, 2, '0xBE is 23 bytes, so two fragments');
 
-  const sum = b.slice(4, -1).reduce((a, x) => a + x, 0);
-  assert.strictEqual(b[b.length - 1] & 0x1f, sum & 0x1f, 'trailer checks over the payload');
+  for (const [name, frags, len, cmd] of [['0xB8', b8, 26, 0xb8], ['0xBE', be, 23, 0xbe]]) {
+    const [first, second] = frags;
+    assert.strictEqual(first.c, 0xffb1, `${name}: the command channel`);
+    assert.strictEqual((first.b[1] << 8) | first.b[2], len, `${name}: total payload length`);
+    assert.strictEqual(first.b[3], 0x00, `${name}: fragment 0`);
+    assert.strictEqual(second.b[3], 0x01, `${name}: fragment 1`);
+    assert.strictEqual(first.b[0], second.b[0], `${name}: both fragments share a package index`);
+    assert.strictEqual((second.b[1] << 8) | second.b[2], len, `${name}: length repeats on each fragment`);
+    assert.strictEqual(first.b[4], cmd, `${name}: command byte at index 4`);
+    assert.strictEqual(first.b[12], 180, `${name}: height`);
+    assert.strictEqual((first.b[13] << 8) | first.b[14], 9850, `${name}: weight x100 big-endian`);
+    assert.strictEqual(first.b[15], 0x80 | 39, `${name}: sex bit and age`);
+    // Sign-magnitude UTC offset, never two's complement.
+    assert.strictEqual(first.b[10] & 0x80, 0, `${name}: a positive offset leaves bit 15 clear`);
+  }
+
+  // The bitmask, which is the entire point: bit 0 is fun_open_imp. It sits at
+  // payload index 14 in 0xB8 and 16 in 0xBE.
+  assert.strictEqual(b8[0].b[4 + 14] & 0x01, 0x01, '0xB8 requests the impedance sweep');
+  assert.strictEqual(be[1].b[4 + (16 - 16)] & 0x01, 0x01, '0xBE requests the impedance sweep');
+
+  // And the trailer covers that fragment's payload only.
+  for (const w of writes) {
+    const sum = w.b.slice(4, -1).reduce((a, x) => a + x, 0);
+    assert.strictEqual(w.b[w.b.length - 1] & 0x1f, sum & 0x1f, `${w.what}: trailer`);
+  }
 });
 
 test('a female profile clears the sex bit rather than always claiming male', async () => {

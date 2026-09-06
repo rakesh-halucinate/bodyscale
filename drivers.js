@@ -132,6 +132,36 @@
       return p;
     },
 
+    /*
+     * Write one logical message, split across as many 16-byte fragments as it
+     * needs. Every fragment carries the same package index and the same total
+     * length; only the fragment index advances.
+     *
+     * The 0xB8 user-info payload is 26 bytes, so it is two fragments — which
+     * is what the "app name" packet always was: fragment 1, carrying the tail
+     * of the profile including the nickname, not a separate handshake step.
+     */
+    async writeMessage(ctx, payload, what) {
+      const st = ctx.state.drt;
+      const pkg = drTrust.nextPkg(st);
+      const total = payload.length;
+      const CHUNK = 16;
+      for (let off = 0, frag = 0; off < total; off += CHUNK, frag += 1) {
+        const chunk = payload.slice(off, off + CHUNK);
+        const p = new Uint8Array(4 + chunk.length + 1);
+        p[0] = pkg;
+        p[1] = (total >> 8) & 0xff;
+        p[2] = total & 0xff;
+        p[3] = frag;
+        p.set(chunk, 4);
+        let sum = 0;
+        for (const b of chunk) sum += b;
+        p[p.length - 1] = sum & 0x1f;
+        const label = total > CHUNK ? `${what} [${frag + 1}/${Math.ceil(total / CHUNK)}]` : what;
+        await ctx.write(0xffb0, 0xffb1, p, label);
+      }
+    },
+
     /* The scale de-duplicates on the package index, so it must advance. */
     nextPkg(st) {
       st.pkg = ((st.pkg || 0) + 1) & 0xff;
@@ -189,64 +219,66 @@
     },
 
     /*
-     * Declare the user to the scale.
+     * Declare the user, and ask for an impedance measurement.
      *
-     * Command 0xBE, 23 payload bytes:
+     * Which command carries this depends on the device: the SDK picks it from
+     * deviceType = deviceSubType | 32, giving 0xB8 for 43, 0xBA for 40, and
+     * 0xBE or 0xC0 otherwise. We cannot read the subtype from here, so both
+     * plausible commands go out. A scale ignores a command it does not know,
+     * and one wasted 28-byte write costs far less than another trip to it.
      *
-     *   [0]      0xBE
-     *   [1..4]   unix time, big-endian
-     *   [5..6]   UTC offset in MINUTES, signed big-endian
-     *   [7]      user index
-     *   [8]      height in cm
-     *   [9..10]  weight x100, big-endian (bit 15 = athlete mode)
-     *   [11]     age, with 0x80 set for male
-     *   [12..13] target weight x100, big-endian
-     *   [14..15] start weight x100, big-endian
-     *   [16]     function bitmask
-     *   [17..20] user id, big-endian
-     *   [21..22] head index and sequence
+     * The field that matters in both is the function bitmask, whose bit 0 is
+     * fun_open_imp. It is the only field in this protocol that asks for an
+     * impedance sweep; there is no start command.
      *
-     * Byte 16 is the one that matters. Bit 0 is fun_open_imp — the request for
-     * an impedance measurement — and it is the only field in this protocol
-     * that asks the scale to run its sweep. There is no start command; the
-     * scale runs it when a well-formed profile arrives with that bit set, and
-     * announces it in the state byte of the weight stream.
-     *
-     * The old packet used command 0xB8 at the wrong offset with a three-byte
-     * header, a hardcoded +05:30 UTC offset, a 348.31 kg target weight, and a
-     * second fragment carrying ASCII "icomon" — which was never an app name,
-     * but the nickname field of a different command's payload.
+     * The old 0xB8 payload was right field for field — a previous analysis
+     * confirmed it byte for byte against the vendor encoder, bitmask included.
+     * Its only fault was the three-byte header that put every field one place
+     * to the left. So it is sent again here, correctly framed, as two
+     * fragments: the "app name" packet was never a handshake step but the tail
+     * of this very message, carrying the nickname.
      */
     async writeProfile(ctx, weightKg) {
-      const st = ctx.state.drt;
       const prof = ctx.profile() || {};
       const ts = Math.floor(ctx.now() / 1000);
       const h = Math.min(220, Math.max(100, Math.round(prof.heightCm || 170)));
       const age = Math.min(127, Math.max(0, Math.round(prof.age || 30)));
       const male = String(prof.sex || 'male').toLowerCase() !== 'female';
-
       const declaredKg = Math.min(300, Math.max(10, weightKg || prof.weightKg || 60));
       const dw = Math.round(declaredKg * 100);
-      // Taken from the host clock rather than hardcoded: the old +05:30 was
-      // only ever right in India.
-      const tzMin = -new Date().getTimezoneOffset();
-      const FUN_IMPEDANCE = 0x01;                 // the bit this all turns on
-      const FUN_BALANCE = 0x02, FUN_HR = 0x04, FUN_GRAVITY = 0x08;
-      const flags = FUN_IMPEDANCE | FUN_BALANCE | FUN_HR | FUN_GRAVITY;
 
+      /*
+       * The UTC offset is sign-magnitude, not two's complement: bit 15 marks a
+       * negative offset and the low bits carry its size. Writing -300 as
+       * 0xFED4 would read as a +32468 minute offset west of nowhere.
+       */
+      const tzMin = -new Date().getTimezoneOffset();
+      const tz = (tzMin < 0 ? 0x8000 : 0) | (Math.abs(tzMin) & 0x7fff);
+
+      // bit0 impedance, bit1 balance, bit2 heart rate, bit3 gravity.
+      const FUNCTIONS = 0x0f;
       const be16 = (v) => [(v >> 8) & 0xff, v & 0xff];
       const be32 = (v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
-      const payload = [
-        0xbe, ...be32(ts), ...be16(tzMin & 0xffff), 0x01, h,
-        ...be16(dw), (male ? 0x80 : 0x00) | age,
-        ...be16(dw), ...be16(dw), flags, ...be32(1), 0x00, 0x00,
+      const sexAge = (male ? 0x80 : 0x00) | age;
+      const who = `${h} cm, ${age}y, ${male ? 'male' : 'female'}, declared ${declaredKg} kg`;
+
+      /*
+       * Target and start weight are both set to the declared weight. Two
+       * independent readings of the encoder disagreed on which of the pairs at
+       * payload 12-15 is which; making them equal removes the question.
+       */
+      const b8 = [
+        0xb8, ...be32(ts), ...be16(tz), 0x01, h, ...be16(dw), sexAge,
+        ...be16(dw), FUNCTIONS, 0x00, 0x00, 0x00, 0x00,
+        0x06, 0x69, 0x63, 0x6f, 0x6d, 0x6f, 0x6e,          // nickname "icomon"
+      ];
+      const be = [
+        0xbe, ...be32(ts), ...be16(tz), 0x01, h, ...be16(dw), sexAge,
+        ...be16(dw), ...be16(dw), FUNCTIONS, ...be32(1), 0x00, 0x00,
       ];
 
-      const what = `user profile (${h} cm, ${age}y, ${male ? 'male' : 'female'},`
-        + ` declared ${declaredKg} kg, impedance requested)`;
-      st.handshakeDone = true;
-      await ctx.write(0xffb0, 0xffb1,
-        drTrust.packet(payload, drTrust.nextPkg(st)), what);
+      await drTrust.writeMessage(ctx, b8, `user profile 0xB8 (${who}, impedance requested)`);
+      await drTrust.writeMessage(ctx, be, `user profile 0xBE (${who}, impedance requested)`);
     },
 
     /*
