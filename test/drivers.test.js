@@ -184,7 +184,10 @@ test('a record frame carrying impedance drives derived body composition', async 
 test('the real setup frame is recognised and yields a session id', async () => {
   const { ctx, out } = await feed([REAL.setup]);
   assert.ok(out[0], 'the 0x1D setup frame must be recognised');
-  assert.equal(ctx.state.drt.session, 0x00);
+  // Byte 0, the frame's sequence number — not byte 1, which is padding. The
+  // real frame here is `03 00 1d 00 aa ...`, so the id the scale wants echoed
+  // is 0x03. This previously asserted 0x00, which was the bug, not the spec.
+  assert.equal(ctx.state.drt.session, 0x03);
   assert.match(out[0].characteristic, /session setup/i);
 });
 
@@ -343,4 +346,49 @@ test('Dr Trust: the profile declares the real weight and the real sex', async ()
   const unknown = await run('male', undefined);
   const declared = (unknown.bytes[12] << 8) | unknown.bytes[13];
   assert.ok(declared >= 1000 && declared <= 30000, `declared ${declared} out of range`);
+});
+
+test('the session acknowledgement echoes the id the scale actually asked for', async () => {
+  const { ctx } = await feed([REAL.setup]);
+  await new Promise((r) => setTimeout(r, 20));           // the writes are not awaited
+  const ack = ctx.calls.writes.find((w) => /session ack/.test(w.what));
+  assert.ok(ack, 'a session ack must be written');
+  const bytes = ack.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
+  // Packet is [seq][len][frag][type 0xB0][session id]; the real frame's id is 0x03.
+  assert.strictEqual(bytes[3], 0xb0, 'the session-ack command type');
+  assert.strictEqual(bytes[4], 0x03,
+    'the id must be the scale\'s own byte 0, not the always-zero byte 1');
+});
+
+/*
+ * The scale sets its measuring current from the weight it has been told, and
+ * decides early. Declaring a stand-in until the weight locks means it decides
+ * on a number that is wrong by tens of kilos.
+ */
+test('a live weight is declared to the scale as soon as it appears', async () => {
+  const { ctx } = await feed([REAL.setup, REAL.rising]);
+  await new Promise((r) => setTimeout(r, 20));
+
+  const profiles = ctx.calls.writes.filter((w) => /user profile/.test(w.what));
+  assert.ok(profiles.length >= 2,
+    `expected a re-declare after the live weight, saw ${profiles.length} profile write(s)`);
+
+  const last = profiles[profiles.length - 1];
+  const bytes = last.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
+  const declared = ((bytes[12] << 8) | bytes[13]) / 100;
+  assert.strictEqual(declared, 70.45, 'the weight the scale just reported, not a stand-in');
+  assert.match(last.what, /70\.45 kg/);
+
+  // The first one is still a guess — nobody is on the scale when the session
+  // opens — but it must no longer be openScale's frozen 60.00 kg by the time
+  // the scale has anything to say.
+  const first = profiles[0].hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
+  assert.strictEqual(((first[12] << 8) | first[13]) / 100, 60,
+    'documents that the opening declaration is still a placeholder');
+
+  // And it is declared once, not on every frame of the weight stream.
+  const { ctx: c2 } = await feed([REAL.setup, REAL.rising, REAL.rising, REAL.overshoot]);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(c2.calls.writes.filter((w) => /user profile/.test(w.what)).length, 2,
+    'one opening declaration and one correction, however many frames arrive');
 });

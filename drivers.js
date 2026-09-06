@@ -109,7 +109,7 @@
       ctx.state.drt = {
         session: null, weightKg: 0, impedanceOhm: null, live: false,
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
-        profileSent: false, biaRequested: false,
+        profileSent: false, biaRequested: false, weightDeclared: false,
       };
       /*
        * The record channel first, and ONLY that.
@@ -245,11 +245,31 @@
           if (st.finalReported) {
             st.finalReported = false; st.finalKg = null; st.impedanceOhm = null;
             st.biaRequested = false;          // a new step-on may ask again
+            st.weightDeclared = false;        // and re-declares its own weight
           }
         } else if (!settled) {
           state = 'settling';
           st.onScale = true;
           st.weightKg = kg;
+          /*
+           * Re-declare the profile the moment a real weight appears.
+           *
+           * The handshake goes out when the scale opens its session, which is
+           * before anyone has stood on it, so the declared weight there can
+           * only ever be a guess — and the guess we inherited was openScale's
+           * hardcoded 60.00 kg. The scale uses the declared weight to set the
+           * current it drives, and it decides whether to run its sweep early,
+           * so telling it 60 kg for a 96 kg person and correcting it after the
+           * weight locks corrects it too late to matter.
+           *
+           * A live reading arrives seconds before the lock. That is the moment
+           * to tell the truth, and it costs one 20-byte write.
+           */
+          if (!st.weightDeclared && kg >= 10) {
+            st.weightDeclared = true;
+            Promise.resolve(drTrust.sendProfile(ctx, kg))
+              .catch((e) => ctx.log(`  Dr Trust: could not re-declare weight: ${e.message}`, 'warn'));
+          }
         } else {
           state = st.finalReported && st.finalKg === kg ? 'held' : 'final';
           st.weightKg = kg;
@@ -296,7 +316,25 @@
       const m2 = m >= 0 ? m : drTrust.findMarker(b, 0x1d);
       const q = drTrust.findMarker(b, 0x23);
       if (m2 >= 0 && q < 0) {
-        st.session = m2 >= 1 ? b[m2 - 1] : b[0];
+        /*
+         * The session id is byte 0, always — the frame's own sequence number.
+         *
+         * This used to read b[m2 - 1], the byte before the type marker, which
+         * is byte 0 only on the SSW532 where the marker sits at index 1. The
+         * SSW533 puts the marker at index 2, so on this scale it read byte 1,
+         * which is padding and always zero. We have been acknowledging every
+         * session with id 0x00 instead of the id the scale asked for:
+         *
+         *     2e 00 1d 00 aa ...      id is 0x2e, we answered 0x00
+         *      ^     ^
+         *      |     marker (index 2 here, index 1 on the SSW532)
+         *      session id
+         *
+         * The protocol note at the top of this file said "session id in byte 0"
+         * all along; the offset generalisation quietly broke it for the very
+         * model it was added for.
+         */
+        st.session = b[0];
         ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id 0x${st.session.toString(16)}.`, 'info');
 
         /*
