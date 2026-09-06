@@ -172,8 +172,8 @@
       ctx.state.drt = {
         session: null, weightKg: 0, impedanceOhm: null, live: false,
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
-        profileSent: false, weightDeclared: false,
-        handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0,
+        profileSent: false,
+        handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -277,8 +277,22 @@
         ...be16(dw), ...be16(dw), FUNCTIONS, ...be32(1), 0x00, 0x00,
       ];
 
-      await drTrust.writeMessage(ctx, b8, `user profile 0xB8 (${who}, impedance requested)`);
-      await drTrust.writeMessage(ctx, be, `user profile 0xBE (${who}, impedance requested)`);
+      /*
+       * One command per declaration, alternating.
+       *
+       * The SDK declares the user twice — once when the notifications are up,
+       * once after the device introduces itself — and sends a single command
+       * each time. Sending both candidates at both points made eight frames
+       * where the app sends four, so each declaration carries one: 0xB8 first,
+       * 0xBE second. Both get tried, and the scale sees the traffic volume it
+       * expects rather than a burst.
+       */
+      const st = ctx.state.drt;
+      const useB8 = (st.declarations || 0) % 2 === 0;
+      st.declarations = (st.declarations || 0) + 1;
+      await (useB8
+        ? drTrust.writeMessage(ctx, b8, `user profile 0xB8 (${who}, impedance requested)`)
+        : drTrust.writeMessage(ctx, be, `user profile 0xBE (${who}, impedance requested)`));
     },
 
     /*
@@ -334,7 +348,6 @@
           st.onScale = false;
           if (st.finalReported) {
             st.finalReported = false; st.finalKg = null; st.impedanceOhm = null;
-            st.weightDeclared = false;        // and re-declares its own weight
             st.handshakeDone = false; st.lastLiveKg = 0;
           }
         } else if (!settled) {
@@ -342,39 +355,22 @@
           st.onScale = true;
           st.weightKg = kg;
           /*
-           * Re-declare the profile the moment a real weight appears.
+           * Nothing is written here.
            *
-           * The handshake goes out when the scale opens its session, which is
-           * before anyone has stood on it, so the declared weight there can
-           * only ever be a guess — and the guess we inherited was openScale's
-           * hardcoded 60.00 kg. The scale uses the declared weight to set the
-           * current it drives, and it decides whether to run its sweep early,
-           * so telling it 60 kg for a 96 kg person and correcting it after the
-           * weight locks corrects it too late to matter.
+           * This used to re-declare the profile whenever the live weight
+           * steadied, on my reasoning that the scale sets its measuring
+           * current from the declared weight and so should be told the real
+           * one early. The vendor app does no such thing: it declares the user
+           * once and then only listens. Combined with the declaration at
+           * connect and the one after the device introduces itself, that made
+           * twelve user-info frames in a burst where the app sends two — and a
+           * scale being re-declared every few hundred milliseconds has every
+           * reason to keep resetting instead of measuring.
            *
-           * A live reading arrives seconds before the lock. That is the moment
-           * to tell the truth, and it costs one 20-byte write.
+           * The declared weight is the user's own stored weight from their
+           * profile, not the live reading. We do not have one, and inventing a
+           * stream of them is worse than sending none.
            */
-          /*
-           * Declare it once the reading has stopped climbing.
-           *
-           * Stepping on is not instantaneous: the stream ramps up through
-           * whatever fraction of the person is on the plate. Declaring the
-           * first reading over a floor caught 10.45 kg for a 93.4 kg person —
-           * further from the truth than the 60 kg placeholder it replaced.
-           *
-           * Two consecutive readings within 2% of each other means the weight
-           * has arrived, which happens well before the scale locks it.
-           */
-          const steady = st.lastLiveKg > 0 && Math.abs(kg - st.lastLiveKg) / kg < 0.02;
-          const prev = st.lastLiveKg;
-          st.lastLiveKg = kg;
-          if (!st.weightDeclared && kg >= 20 && steady) {
-            st.weightDeclared = true;
-            ctx.log(`  Dr Trust: weight steady near ${kg} kg (was ${prev}); declaring it.`, 'ok');
-            Promise.resolve(drTrust.sendProfile(ctx, kg))
-              .catch((e) => ctx.log(`  Dr Trust: could not re-declare weight: ${e.message}`, 'warn'));
-          }
         } else {
           state = st.finalReported && st.finalKg === kg ? 'held' : 'final';
           st.weightKg = kg;

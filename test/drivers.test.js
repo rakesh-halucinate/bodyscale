@@ -313,10 +313,13 @@ test('the profile asks for impedance, which is the only way to ask', async () =>
     now: () => 1757155200000, log: () => {},
     write: async (s2, c, b, what) => { writes.push({ c, b: [...b], what }); return true; },
   };
+  // Declarations alternate between the two candidate commands, one per
+  // declaration, because the SDK sends a single user-info command each time.
+  await D.drTrust.writeProfile(ctx, 98.5);
   await D.drTrust.writeProfile(ctx, 98.5);
 
   // Which command this scale wants depends on a device subtype we cannot read,
-  // so both candidates go out. 0xB8 is 26 bytes and fragments; 0xBE is 23.
+  // so both candidates are tried. 0xB8 is 26 bytes and fragments; 0xBE is 23.
   const b8 = writes.filter((w) => /0xB8/.test(w.what));
   const be = writes.filter((w) => /0xBE/.test(w.what));
   assert.strictEqual(b8.length, 2, '0xB8 is 26 bytes, so two fragments');
