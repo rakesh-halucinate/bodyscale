@@ -365,30 +365,38 @@ test('the session acknowledgement echoes the id the scale actually asked for', a
  * decides early. Declaring a stand-in until the weight locks means it decides
  * on a number that is wrong by tens of kilos.
  */
-test('a live weight is declared to the scale as soon as it appears', async () => {
-  const { ctx } = await feed([REAL.setup, REAL.rising]);
+test('a settled live weight is declared, and a footfall is not', async () => {
+  // One rising frame is someone mid-step. Two that agree is their weight.
+  const { ctx } = await feed([REAL.setup, REAL.rising, REAL.rising]);
   await new Promise((r) => setTimeout(r, 20));
 
   const profiles = ctx.calls.writes.filter((w) => /user profile/.test(w.what));
   assert.ok(profiles.length >= 2,
-    `expected a re-declare after the live weight, saw ${profiles.length} profile write(s)`);
+    `expected a re-declare after the weight steadied, saw ${profiles.length}`);
 
   const last = profiles[profiles.length - 1];
   const bytes = last.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
-  const declared = ((bytes[12] << 8) | bytes[13]) / 100;
-  assert.strictEqual(declared, 70.45, 'the weight the scale just reported, not a stand-in');
-  assert.match(last.what, /70\.45 kg/);
+  assert.strictEqual(((bytes[12] << 8) | bytes[13]) / 100, 70.45);
 
-  // The first one is still a guess — nobody is on the scale when the session
-  // opens — but it must no longer be openScale's frozen 60.00 kg by the time
-  // the scale has anything to say.
+  // The opening declaration is still a placeholder: nobody is on the scale
+  // when the session opens.
   const first = profiles[0].hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
-  assert.strictEqual(((first[12] << 8) | first[13]) / 100, 60,
-    'documents that the opening declaration is still a placeholder');
+  assert.strictEqual(((first[12] << 8) | first[13]) / 100, 60);
 
-  // And it is declared once, not on every frame of the weight stream.
-  const { ctx: c2 } = await feed([REAL.setup, REAL.rising, REAL.rising, REAL.overshoot]);
+  // A single ramping reading must NOT be declared. 10.45 kg went to the scale
+  // as a 93.4 kg person's weight before this rule existed.
+  const { ctx: solo } = await feed([REAL.setup, REAL.stepOn]);
   await new Promise((r) => setTimeout(r, 20));
-  assert.strictEqual(c2.calls.writes.filter((w) => /user profile/.test(w.what)).length, 2,
-    'one opening declaration and one correction, however many frames arrive');
+  assert.strictEqual(solo.calls.writes.filter((w) => /user profile/.test(w.what)).length, 1,
+    'one mid-step reading is not a weight');
+
+  // And the correction happens once, however long the stream runs.
+  const { ctx: many } = await feed([REAL.setup, REAL.rising, REAL.rising, REAL.rising, REAL.overshoot]);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(many.calls.writes.filter((w) => /user profile/.test(w.what)).length, 2);
+
+  // The re-declare is one packet: the session is not acknowledged twice.
+  assert.strictEqual(many.calls.writes.filter((w) => /session ack/.test(w.what)).length, 1,
+    'a session that is already open must not be re-acknowledged');
+  assert.strictEqual(many.calls.writes.filter((w) => /app name/.test(w.what)).length, 1);
 });

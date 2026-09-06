@@ -311,3 +311,53 @@ test('INT-DEFER-15  a measured pair is plain data a host can store and bring bac
   assert.strictEqual(m.derived.bodyFatPercent > 0, true);
   assert.strictEqual(m.source, 'recomputed');
 });
+
+/*
+ * `scaleProfile` identifies the person to the SCALE, not to the maths.
+ *
+ * These are different things. The scale decides whether to run its impedance
+ * sweep during the handshake, before anyone stands on it, so it needs an
+ * identity up front — but the derived values must stay deferred, which is the
+ * whole point of withoutProfile.
+ */
+test('INT-DEF-20  a deferred measure may still identify the person to the scale', async () => {
+  const { events } = await H.serve({
+    replay: H.FIXTURE,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') {
+        send({ id: 'S', cmd: 'measure', withoutProfile: true,
+               scaleProfile: { sex: 'male', age: 39, heightCm: 180 } });
+        return false;
+      }
+      return (ev.type === 'measurement' || ev.type === 'error') && ev.id === 'S';
+    },
+  });
+
+  const m = events.find((e) => e.type === 'measurement');
+  assert.ok(m, `expected a measurement, saw [${events.map((e) => e.type).join(', ')}]`);
+  assert.strictEqual(m.profileDeferred, true, 'still deferred');
+  assert.deepStrictEqual(m.derived, {}, 'nothing was interpreted');
+  // And the identity must not come back out. The host owns that data; we
+  // wrote it to the scale and are not a second copy of it.
+  assert.strictEqual(m.profile, null, 'a deferred reading reports no profile');
+  assert.ok(!('scaleProfile' in m), 'the scale identity is never echoed');
+  assert.ok(!JSON.stringify(m).includes('180'), 'no field carries the height back');
+});
+
+test('INT-DEF-21  a malformed scale identity is refused, not silently replaced', async () => {
+  const { events } = await H.serve({
+    replay: H.FIXTURE,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') {
+        send({ id: 'B', cmd: 'measure', withoutProfile: true,
+               scaleProfile: { sex: 'male', age: 999, heightCm: 180 } });
+        return false;
+      }
+      return (ev.type === 'measurement' || ev.type === 'error') && ev.id === 'B';
+    },
+  });
+  const err = events.find((e) => e.type === 'error');
+  assert.ok(err, 'a nonsense age must be refused');
+  assert.strictEqual(err.code, 'INVALID_PROFILE');
+  assert.match(err.message, /scaleProfile/);
+});

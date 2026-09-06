@@ -835,11 +835,41 @@ async function serve(a) {
       return fail(req.id, 'BAD_REQUEST',
         'send either a profile or withoutProfile: true, not both');
     }
+
+    /*
+     * `scaleProfile` is who the SCALE is told it is measuring.
+     *
+     * These are two different things and conflating them cost us a lot of
+     * failed measurements. `profile` is what the derived values are computed
+     * from, and deferring it is deliberate: the host owns that data and can
+     * collect it at leisure after the reading is latched.
+     *
+     * But an 8-electrode scale is not a passive sensor. It decides whether to
+     * run its impedance sweep, and what current to drive, from the identity it
+     * is given during the handshake — before anyone has stood on it. With no
+     * identity it gets a stand-in (170 cm, 30, male), and a stand-in is a
+     * plausible reason for it to decline the sweep and report weight alone.
+     *
+     * So a deferred request may still carry `scaleProfile`. It is written to
+     * the scale and used for nothing else: it never reaches the BIA maths, is
+     * never stored, and never appears in a result. The host still owns the
+     * data and still supplies it; it just supplies it early enough to matter.
+     */
+    let scaleProfile = null;
+    if (deferred && req.scaleProfile) {
+      const bad = validateProfile(req.scaleProfile);
+      if (bad) return fail(req.id, 'INVALID_PROFILE', `scaleProfile: ${bad}`);
+      scaleProfile = {
+        sex: String(req.scaleProfile.sex || 'male').toLowerCase(),
+        age: Number(req.scaleProfile.age),
+        heightCm: Number(req.scaleProfile.heightCm),
+      };
+    }
     if (running) return fail(req.id, 'BUSY');
 
     // The deferred placeholder is never reported. It exists only so the frame
     // decoding, which needs no profile, has something well formed to carry.
-    const profile = deferred ? null : {
+    const profile = deferred ? scaleProfile : {
       sex: String(req.profile.sex || 'male').toLowerCase(),
       age: Number(req.profile.age),
       heightCm: Number(req.profile.heightCm),

@@ -231,6 +231,37 @@ async function main() {
     process.exit(1);
   }
 
+  /*
+   * Who the SCALE is told it is measuring.
+   *
+   * This is not the profile the results are computed from — that is still
+   * asked for after the reading is latched, and can be changed afterwards
+   * without re-measuring. This is the identity written into the handshake,
+   * because an 8-electrode scale decides whether to run its impedance sweep
+   * before anyone stands on it, and it decides using what it has been told.
+   *
+   * Left unasked it was sent a stand-in: 170 cm, 30 years old, male. That is
+   * a plausible reason for it to weigh and decline to measure.
+   */
+  say('');
+  say(`${C.bold}Who is the scale measuring?${C.off}`);
+  say(`  ${C.dim}The scale is told this during the handshake, before you step on.${C.off}`);
+  say(`  ${C.dim}Your results are still computed from what you enter afterwards.${C.off}`);
+  const who = {
+    sex: await askValid(`  Sex ${C.dim}[male]${C.off} `, {
+      parse: (v) => v.toLowerCase(), fallback: 'male',
+      valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
+    }),
+    age: await askValid('  Age  ', {
+      parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
+      hint: 'Enter an age between 5 and 120.',
+    }),
+    heightCm: await askValid('  Height in cm  ', {
+      parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
+      hint: 'Enter a height between 90 and 250 cm.',
+    }),
+  };
+
   for (;;) {
     // ---------------------------------------------------------------- IDLE
     state('IDLE', 'nothing is being read');
@@ -265,6 +296,8 @@ async function main() {
         // The scale runs its impedance program after the weight locks. Hanging
         // up before it finishes is what produced weight-only readings.
         impedanceWaitSec: Number(arg('--impedance-wait', 30)),
+        // Written to the scale during the handshake, used for nothing else.
+        scaleProfile: who,
       });
     } catch (err) {
       clearLive();
@@ -289,17 +322,19 @@ async function main() {
     say(`  ${C.dim}nothing is re-read until you press Measure Me again.${C.off}`);
     say('');
 
-    const sex = await askValid(`  Sex ${C.dim}[male]${C.off} `, {
-      parse: (v) => v.toLowerCase(), fallback: 'male',
+    const sex = await askValid(`  Sex ${C.dim}[${who.sex}]${C.off} `, {
+      parse: (v) => v.toLowerCase(), fallback: who.sex,
       valid: (v) => v === 'male' || v === 'female',
       hint: 'Enter male or female.',
     });
-    const age = await askValid('  Age  ', {
-      parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
+    const age = await askValid(`  Age ${C.dim}[${who.age}]${C.off} `, {
+      parse: Number, fallback: who.age,
+      valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
       hint: 'Enter an age between 5 and 120.',
     });
-    const heightCm = await askValid('  Height in cm  ', {
-      parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
+    const heightCm = await askValid(`  Height in cm ${C.dim}[${who.heightCm}]${C.off} `, {
+      parse: Number, fallback: who.heightCm,
+      valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
       hint: 'Enter a height between 90 and 250 cm.',
     });
 

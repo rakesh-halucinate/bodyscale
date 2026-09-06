@@ -881,3 +881,31 @@ Sent by the app, received by the app, in order:
 
 A working Electron implementation of exactly this is in
 [`electron-example/`](electron-example/).
+
+### `scaleProfile` — who the scale is told it is measuring
+
+A deferred `measure` (`withoutProfile: true`) may also carry `scaleProfile`:
+
+```json
+{ "cmd": "measure", "withoutProfile": true,
+  "scaleProfile": { "sex": "male", "age": 39, "heightCm": 180 } }
+```
+
+This is **not** the profile the results are computed from, and it does not
+change what comes back: `derived` is still `{}` and `profileDeferred` is still
+`true`. It is written to the scale during the handshake and used for nothing
+else — never stored, never echoed, never fed to the body-composition maths.
+
+It exists because an 8-electrode scale is not a passive sensor. It decides
+whether to run its impedance sweep, and what current to drive through the body,
+from the identity it is given *before* anyone stands on it. Without one the
+driver has to send a stand-in — 170 cm, 30 years old, male — and a scale asked
+to measure body composition for a person who does not exist may reasonably
+report weight alone.
+
+So the host still owns this data and still supplies it. `scaleProfile` only
+lets it supply it early enough for the scale to act on, while the profile that
+drives the numbers stays deferred and editable afterwards.
+
+Validation is the same as `profile`; a malformed one is refused with
+`INVALID_PROFILE` rather than quietly replaced by the stand-in.

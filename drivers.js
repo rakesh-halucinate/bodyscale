@@ -110,6 +110,7 @@
         session: null, weightKg: 0, impedanceOhm: null, live: false,
         finalKg: null, finalReported: false, weightOffset: null, recordOffset: null, onScale: false,
         profileSent: false, biaRequested: false, weightDeclared: false,
+        handshakeDone: false, lastLiveKg: 0, writeChain: null,
       };
       /*
        * The record channel first, and ONLY that.
@@ -137,9 +138,32 @@
      * 26-byte message the profile starts. Hence the shared seq and len.
      */
 
+    /*
+     * Profile writes are queued, never concurrent.
+     *
+     * These are started from inside frame decoding and deliberately not
+     * awaited, so the weight stream cannot stall behind a slow write. That
+     * means two can be in flight at once — the opening handshake and a weight
+     * correction moments later — and their 20-byte writes interleave. The
+     * order they arrive in decides what the scale believes, so a stale 60 kg
+     * declaration can land after the real one and quietly undo it.
+     *
+     * Chaining them costs nothing and makes the last write the last word.
+     */
     async sendProfile(ctx, weightKg) {
       const st = ctx.state.drt;
       if (st.session === null) return;
+      const prior = st.writeChain || Promise.resolve();
+      let release;
+      st.writeChain = new Promise((r) => { release = r; });
+      try { await prior; } catch (e) { /* a failed write must not block the next */ }
+      try {
+        return await drTrust.writeProfile(ctx, weightKg);
+      } finally { release(); }
+    },
+
+    async writeProfile(ctx, weightKg) {
+      const st = ctx.state.drt;
       const prof = ctx.profile();
       const ts = Math.floor(ctx.now() / 1000);
       const h = Math.min(220, Math.max(100, Math.round(prof.heightCm || 170)));
@@ -174,7 +198,18 @@
         [drTrust.packet([0x01, 0x1a, 0x01, 0x00, 0x00, 0x00, 0x06, 0x69, 0x63, 0x6f, 0x6d, 0x6f, 0x6e,
           0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), 'app name'],
       ];
-      for (const [p, what] of packets) await ctx.write(0xffb0, 0xffb1, p, what);
+      /*
+       * A re-declaration is one packet, not three.
+       *
+       * The first send is the handshake: acknowledge the session, declare the
+       * user, name ourselves. Later sends exist only to correct the declared
+       * weight, and re-acknowledging a session that is already open — three
+       * times in one weigh-in, as the logs showed — is not something the app
+       * this firmware expects ever does.
+       */
+      const toSend = st.handshakeDone ? packets.slice(1, 2) : packets;
+      st.handshakeDone = true;
+      for (const [p, what] of toSend) await ctx.write(0xffb0, 0xffb1, p, what);
     },
 
     /*
@@ -246,6 +281,7 @@
             st.finalReported = false; st.finalKg = null; st.impedanceOhm = null;
             st.biaRequested = false;          // a new step-on may ask again
             st.weightDeclared = false;        // and re-declares its own weight
+            st.handshakeDone = false; st.lastLiveKg = 0;
           }
         } else if (!settled) {
           state = 'settling';
@@ -265,8 +301,23 @@
            * A live reading arrives seconds before the lock. That is the moment
            * to tell the truth, and it costs one 20-byte write.
            */
-          if (!st.weightDeclared && kg >= 10) {
+          /*
+           * Declare it once the reading has stopped climbing.
+           *
+           * Stepping on is not instantaneous: the stream ramps up through
+           * whatever fraction of the person is on the plate. Declaring the
+           * first reading over a floor caught 10.45 kg for a 93.4 kg person —
+           * further from the truth than the 60 kg placeholder it replaced.
+           *
+           * Two consecutive readings within 2% of each other means the weight
+           * has arrived, which happens well before the scale locks it.
+           */
+          const steady = st.lastLiveKg > 0 && Math.abs(kg - st.lastLiveKg) / kg < 0.02;
+          const prev = st.lastLiveKg;
+          st.lastLiveKg = kg;
+          if (!st.weightDeclared && kg >= 20 && steady) {
             st.weightDeclared = true;
+            ctx.log(`  Dr Trust: weight steady near ${kg} kg (was ${prev}); declaring it.`, 'ok');
             Promise.resolve(drTrust.sendProfile(ctx, kg))
               .catch((e) => ctx.log(`  Dr Trust: could not re-declare weight: ${e.message}`, 'warn'));
           }
@@ -335,7 +386,8 @@
          * model it was added for.
          */
         st.session = b[0];
-        ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id 0x${st.session.toString(16)}.`, 'info');
+        ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id `
+          + `0x${st.session.toString(16)} — acknowledging it.`, 'ok');
 
         /*
          * Answer it. The scale waits for a session acknowledgement and the

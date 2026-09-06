@@ -49,7 +49,18 @@ const STEP_OFF = 'Step off the scale and step back on.';
  * @param {number}   [opts.timeoutMs]
  * @returns {Promise<{stdout:string, stderr:string, code:number|null, signal:string|null, configDir:string}>}
  */
-function run({ script, fixture = null, env = {}, configDir = null, timeoutMs = 15000 }) {
+/*
+ * The rehearsal now opens by asking who the scale is measuring, because that
+ * identity goes into the handshake before anyone steps on. Every script would
+ * otherwise have to carry the same three answers, and a test that forgot them
+ * would fail somewhere far from the cause, so the harness supplies them.
+ * Pass `identity` to override, or `identity: []` to script them by hand.
+ */
+const WHO = ['male', '39', '180'];
+
+function run({ script, fixture = null, env = {}, configDir = null, timeoutMs = 15000,
+              identity = WHO }) {
+  script = identity.concat(script);
   const dir = configDir || H.configDir('sim');
   const argv = [SIMULATE, '--replay'];
   if (fixture) argv.push(fixture);
