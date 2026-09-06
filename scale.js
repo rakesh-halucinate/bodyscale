@@ -283,6 +283,8 @@ const note = (msg) => { if (!QUIET || LOG_ALWAYS) process.stderr.write(msg + '\n
 // ---------- one measurement ----------
 function measureOnce(opts) {
   return new Promise((resolve) => {
+    /** Subscriptions awaiting the transport's confirmation, by UUID prefix. */
+    const pendingSubs = new Map();
     const args = ['--scan-timeout', String(opts.scanTimeout), '--connect-timeout', String(opts.connectTimeout),
                   '--hold', String(opts.hold)];
     if (opts.name) args.push('--name', opts.name);
@@ -473,15 +475,40 @@ function measureOnce(opts) {
       hex: BCS.hex,
       // ble.py already subscribes to everything notifiable, so there is nothing
       // for a driver to turn on here.
-      subscribe: async (svc, chr) => {
-        if (opts.replay) return true;
+      /*
+       * Wait for the subscription to actually exist.
+       *
+       * This used to resolve the moment the command was written to the pipe,
+       * so `await ctx.subscribe(...)` meant nothing and the driver wrote its
+       * first command before either notification was live:
+       *
+       *     -> subscribing to 0xffb3
+       *     -> wrote user profile ...        <- here
+       *     subscribed to 0000ffb3-...       <- but live only here
+       *
+       * The vendor SDK enables 0xFFB3, waits, enables 0xFFB2, waits, and only
+       * then writes. Talking to a scale before it can answer is not that, and
+       * a reply we are not yet listening for is a reply we lose.
+       */
+      subscribe: (svc, chr) => {
+        if (opts.replay) return Promise.resolve(true);
         const uuid = `0000${chr.toString(16).padStart(4, '0')}`;
-        if (!py.stdin || py.stdin.destroyed || py.stdin.writableEnded) return false;
-        try {
-          py.stdin.write(JSON.stringify({ cmd: 'subscribe', char: uuid }) + '\n');
-          note(`  -> subscribing to 0x${chr.toString(16)}`);
-          return true;
-        } catch (e) { return false; }
+        if (!py.stdin || py.stdin.destroyed || py.stdin.writableEnded) return Promise.resolve(false);
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (ok) => { if (!settled) { settled = true; pendingSubs.delete(uuid); resolve(ok); } };
+          pendingSubs.set(uuid, finish);
+          // A scale that never confirms must not hang the measurement; the
+          // caller carries on and the frames either arrive or they do not.
+          setTimeout(() => {
+            if (!settled) note(`  subscription to 0x${chr.toString(16)} was never confirmed`);
+            finish(false);
+          }, 4000).unref?.();
+          try {
+            py.stdin.write(JSON.stringify({ cmd: 'subscribe', char: uuid }) + '\n');
+            note(`  -> subscribing to 0x${chr.toString(16)}`);
+          } catch (e) { finish(false); }
+        });
       },
       subscribeAll: async () => {},
       /*
@@ -529,6 +556,17 @@ function measureOnce(opts) {
       try { ev = JSON.parse(line); } catch (e) { return; }
       if (ev.t === 'log') {
         note(`  ${ev.msg}`);
+        // "subscribed to 0000ffb3-0000-1000-8000-00805f9b34fb", or the failure
+        // the transport reports when notifications were already running.
+        const sub = /(?:^|\s)(?:subscribed to|could not subscribe to)\s+(\S+)/.exec(ev.msg);
+        if (sub) {
+          const key = sub[1].slice(0, 8);
+          const waiter = pendingSubs.get(key);
+          // Already-started notifications are a success for our purposes: the
+          // characteristic is live, which is all the driver is waiting on.
+          if (waiter) waiter(!/could not subscribe/.test(ev.msg)
+            || /already started/i.test(ev.msg));
+        }
         if (/scanning/i.test(ev.msg)) {
           emit({ phase: 'scanning', message: ev.msg });
           armHint('WAKE_THE_SCALE', 'Step on the scale to wake it, then wait a moment.');

@@ -396,48 +396,29 @@
       const q = drTrust.findMarker(b, 0x23);
       if (m2 >= 0 && q < 0) {
         /*
-         * The session id is byte 0, always — the frame's own sequence number.
+         * This is command 0xAA, the device-info report — not a "session"
+         * frame, and byte 0 is its package index, not a session id. The scale
+         * sends it within a few seconds of the record channel going live and
+         * the SDK answers it with a 0xB0 reply that echoes that index. We have
+         * never sent that reply.
          *
-         * This used to read b[m2 - 1], the byte before the type marker, which
-         * is byte 0 only on the SSW532 where the marker sits at index 1. The
-         * SSW533 puts the marker at index 2, so on this scale it read byte 1,
-         * which is padding and always zero. We have been acknowledging every
-         * session with id 0x00 instead of the id the scale asked for:
+         * The SDK also re-declares the user here, after the device has
+         * introduced itself, so the profile goes out a second time.
          *
-         *     2e 00 1d 00 aa ...      id is 0x2e, we answered 0x00
-         *      ^     ^
-         *      |     marker (index 2 here, index 1 on the SSW532)
-         *      session id
-         *
-         * The protocol note at the top of this file said "session id in byte 0"
-         * all along; the offset generalisation quietly broke it for the very
-         * model it was added for.
+         * Neither is awaited: this runs inside frame decoding and a write that
+         * stalls must not stall the weight stream.
          */
-        st.session = b[0];
-        ctx.log(`  Dr Trust: session frame (type 0x${b[m2].toString(16)}), session id `
-          + `0x${st.session.toString(16)} — acknowledging it.`, 'ok');
+        const pkg = b[0];
+        st.session = pkg;
+        ctx.log(`  Dr Trust: device info (command 0x${b[m2].toString(16)}), package `
+          + `0x${pkg.toString(16)} — acknowledging and re-declaring the user.`, 'ok');
 
-        /*
-         * Answer it. The scale waits for a session acknowledgement and the
-         * user profile before it runs its full impedance program — the one the
-         * display calls P1, which holds for about ten seconds, then L1.
-         *
-         * Left unanswered it still streams weight and still sends a record
-         * frame, but the impedance in it is a quick preliminary figure rather
-         * than the measured one, which is why unanswered sessions produced
-         * values far outside the physically possible band.
-         *
-         * Not awaited: this runs inside frame decoding, and a write that
-         * stalls must not stall the stream. Failures are reported by the
-         * transport on its own channel.
-         */
+        Promise.resolve(drTrust.ack(ctx, pkg))
+          .catch((e) => ctx.log(`  Dr Trust: could not acknowledge: ${e.message}`, 'warn'));
         if (!st.profileSent) {
           st.profileSent = true;
-          // The weight stream goes on now, after the session frame, not before.
-          Promise.resolve(ctx.subscribe(0xffb0, 0xffb2))
-            .catch(() => {});
-          Promise.resolve(drTrust.sendProfile(ctx))
-            .catch((e) => ctx.log(`  Dr Trust: handshake failed: ${e.message}`, 'warn'));
+          Promise.resolve(drTrust.sendProfile(ctx, st.weightKg || undefined))
+            .catch((e) => ctx.log(`  Dr Trust: re-declaring the user failed: ${e.message}`, 'warn'));
         }
         return {
           characteristic: 'Dr Trust session setup', spec: 'Dr Trust vendor protocol',

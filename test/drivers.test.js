@@ -383,3 +383,25 @@ test('the one real record says ten impedance slots, all of them empty', () => {
   assert.deepStrictEqual(values, new Array(10).fill(0),
     'the scale returned the form and measured nothing');
 });
+
+/*
+ * The scale introduces itself with command 0xAA and the SDK answers it. We
+ * never did — we read a "session id" out of it and replied with a malformed
+ * frame, or latterly nothing at all.
+ */
+test('the device-info frame is acknowledged with its own package index', async () => {
+  const { ctx } = await feed([REAL.setup]);
+  await new Promise((r) => setTimeout(r, 30));
+
+  const ack = ctx.calls.writes.find((w) => /ack of package/.test(w.what));
+  assert.ok(ack, `no acknowledgement sent; wrote [${ctx.calls.writes.map((w) => w.what).join(', ')}]`);
+  const b = ack.hex.replace(/\s+/g, '').match(/../g).map((h) => parseInt(h, 16));
+  assert.strictEqual(b[4], 0xb0, 'reply command');
+  // REAL.setup starts `03 00 1d 00 aa`, so its package index is 0x03.
+  assert.strictEqual(b[5], 0x03, 'echoing the package index of the frame being answered');
+  assert.strictEqual(b[6], 0x00, 'state 0 = success');
+
+  // And the user is declared again, as the SDK does after the introduction.
+  assert.ok(ctx.calls.writes.some((w) => /user profile/.test(w.what)),
+    'the profile is re-declared once the device has introduced itself');
+});
