@@ -182,7 +182,7 @@
         profileSent: false,
         handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
         sweepSeen: false, wireVersion: null, lastRecord: null, liveWeighing: false,
-        historySeen: false,
+        historySeen: false, emptySweepWarned: false,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -713,8 +713,16 @@
        * nothing on screen distinguished it from a fresh measurement. A stale
        * number presented as a new one is worse than an error.
        */
+      /*
+       * Only a record with values can be a replay.
+       *
+       * While the sweep is running the scale emits records with every slot
+       * still empty — that is it saying "not finished", not "here is the same
+       * answer again". Warning on those told the user their scale had replayed
+       * stored data at the exact moment it was, in fact, measuring.
+       */
       const signature = `${grams}:${impedances.join(',')}`;
-      if (count > 0 && signature === st.lastRecord) {
+      if (measured.length > 0 && signature === st.lastRecord) {
         res.warnings.push('This record is identical to the previous one, down to the weight '
           + 'and every impedance value. The scale replayed what it had stored rather than '
           + 'measuring: its display would not have shown P-1. Step off, wait for it to clear, '
@@ -733,9 +741,24 @@
           + 'established, so the sum is used provisionally and every value derived from it should '
           + 'be checked against the vendor app before it is trusted.');
       } else if (count > 0) {
-        res.warnings.push(`The scale returned ${count} impedance slots and measured none of them. `
-          + 'Its sweep needs bare feet on all four foot pads and both hands on the handle, '
-          + 'held still until the display stops.');
+        /*
+         * The sweep started and produced nothing. This is the state to be
+         * precise about, because it is the one that looks like a broken
+         * program and is usually a broken circuit: an 8-electrode measurement
+         * needs all four foot pads AND both hands, and it needs them for the
+         * whole ten seconds the display shows P-1. Letting go at nine seconds
+         * gives exactly this — a record with every slot still zero.
+         */
+        if (!st.emptySweepWarned) {
+          st.emptySweepWarned = true;
+          ctx.log('  Dr Trust: the sweep is running but every impedance slot is still empty. '
+            + 'Keep BOTH hands on the handle and BARE feet on all four pads until the display '
+            + 'stops showing P-1 — the circuit runs hand to foot, and breaking it at any point '
+            + 'restarts the measurement.', 'warn');
+        }
+        res.warnings.push(`The scale ran its sweep and returned ${count} impedance slots with `
+          + 'nothing in them. The circuit runs hand to foot: it needs both hands on the handle '
+          + 'and bare feet on all four pads, held for the whole time the display shows P-1.');
       }
       if (cmdByte === 0xa5) {
         res.warnings.push('Replayed from the scale\'s memory, not measured live.');

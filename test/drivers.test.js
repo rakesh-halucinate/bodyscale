@@ -171,7 +171,7 @@ test('the real record frame yields 98.50 kg and ten empty impedance slots', asyn
   assert.strictEqual(r.values.impedanceCount, 10, 'the count comes off the wire');
   assert.deepStrictEqual(r.values.impedances, new Array(10).fill(0));
   assert.equal(r.values.impedanceOhm, null, 'nothing measured, so nothing reported');
-  assert.ok(r.warnings.some((w) => /measured none of them/.test(w)),
+  assert.ok(r.warnings.some((w) => /nothing in them/.test(w)),
     'and the panel says so rather than showing a silent blank');
 });
 
@@ -619,4 +619,34 @@ test('a history record is refused even after someone stands on the scale', async
   assert.ok(out[3] && out[3].values.impedanceOhm > 0, 'the live record is the reading');
   assert.ok(ctx.calls.logs.some(([, m]) => /command 0xA5/i.test(m)),
     'and the run names what it refused, so a log shows which kind arrived');
+});
+
+/*
+ * While the sweep runs, the scale emits records with every slot still empty.
+ * That is it saying "not finished", not "here is the same answer again", and
+ * warning about a replay on those told the user their scale was replaying
+ * stored data at the exact moment it was measuring.
+ */
+test('empty records during the sweep are not mistaken for a replay', async () => {
+  const empty = H.recordFrame({ weightKg: 97.55, impedances: [] });
+  const { ctx, out } = await feedCold([REAL.rising, empty, empty, empty]);
+
+  for (const r of out.slice(1)) {
+    assert.ok(r, 'an empty record still decodes');
+    assert.strictEqual(r.values.impedanceOhm, null);
+    assert.ok(!r.warnings.some((w) => /replayed/.test(w)),
+      'and is never called a replay, however many arrive');
+  }
+  // It should say what to do about it, once, rather than on every frame.
+  const nagging = ctx.calls.logs.filter(([, m]) => /every impedance slot is still empty/.test(m));
+  assert.strictEqual(nagging.length, 1, 'said once, not on every frame');
+  assert.match(nagging[0][1], /both hands/i);
+});
+
+test('a genuine repeat of a measured record is still called out', async () => {
+  const real = H.recordFrame({ weightKg: 97.55, impedances: H.segmentalFor(605.5) });
+  const { out } = await feedCold([REAL.rising, real, real]);
+  assert.ok(!out[1].warnings.some((w) => /replayed/.test(w)), 'the first is a reading');
+  assert.ok(out[2].warnings.some((w) => /replayed/.test(w)),
+    'the second, identical down to every value, is not');
 });
