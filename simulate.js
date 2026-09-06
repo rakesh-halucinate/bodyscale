@@ -402,8 +402,39 @@ async function main() {
     // ---------------------------------------------------------------- IDLE
     state('IDLE', 'nothing is being read');
     say(`  ${C.dim}In the app this is the "Measure Me" button.${C.off}`);
-    const go = await ask(`  ${C.bold}Press Enter to Measure Me${C.off} ${C.dim}(q to quit)${C.off} `);
+    say(`  ${C.dim}measuring ${who.heightCm} cm, ${who.age}y, ${who.sex}${C.off}`);
+    const go = await ask(`  ${C.bold}Press Enter to Measure Me${C.off} `
+      + `${C.dim}(p to change person, q to quit)${C.off} `);
     if (go.toLowerCase() === 'q') break;
+
+    /*
+     * Somebody else's turn.
+     *
+     * The identity goes to the scale during the handshake, before anyone
+     * stands on it, so measuring a second person with the first one's details
+     * hands the scale the wrong height and age for the whole measurement. The
+     * results entered afterwards would be right and the sweep would have been
+     * run for someone else.
+     */
+    if (go.toLowerCase() === 'p') {
+      say('');
+      who = {
+        sex: await askValid(`  Sex ${C.dim}[${who.sex}]${C.off} `, {
+          parse: (v) => v.toLowerCase(), fallback: who.sex,
+          valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
+        }),
+        age: await askValid('  Age  ', {
+          parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
+          hint: 'Enter an age between 5 and 120.',
+        }),
+        heightCm: await askValid('  Height in cm  ', {
+          parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
+          hint: 'Enter a height between 90 and 250 cm.',
+        }),
+      };
+      saveWho(who);
+      continue;
+    }
 
     // ----------------------------------------------------------- CAPTURING
     state('CAPTURING', 'step on the scale');
