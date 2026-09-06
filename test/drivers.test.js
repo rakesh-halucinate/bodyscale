@@ -142,14 +142,20 @@ test('stepping back on after a final reading starts a fresh measurement', async 
   assert.equal(out[4].values.state, 'final', 'a new final is reported, not suppressed');
 });
 
-test('the real record frame yields 98.50 kg and no impedance', async () => {
-  // Subtype 0x00 carries a weight and a timestamp. It has never carried an
-  // impedance; the bytes once read as one are the low half of that timestamp.
+test('the real record frame yields 98.50 kg and ten empty impedance slots', async () => {
+  /*
+   * One record carries the weight AND the impedances; there are no "subtypes".
+   * This genuine capture declares ten slots at byte 14 and leaves every one of
+   * them zero, which is the scale saying it weighed but never swept.
+   */
   const { out } = await feed([REAL.record]);
   const r = out[0];
   assert.equal(r.values.weight, 98.5);
-  assert.equal(r.values.impedanceOhm, null, 'a weight frame carries no impedance');
-  assert.equal(r.values.subtype, 0x00);
+  assert.strictEqual(r.values.impedanceCount, 10, 'the count comes off the wire');
+  assert.deepStrictEqual(r.values.impedances, new Array(10).fill(0));
+  assert.equal(r.values.impedanceOhm, null, 'nothing measured, so nothing reported');
+  assert.ok(r.warnings.some((w) => /measured none of them/.test(w)),
+    'and the panel says so rather than showing a silent blank');
 });
 
 

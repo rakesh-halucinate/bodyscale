@@ -488,34 +488,29 @@
 
       if (u16 !== 0xffb3 || b.length < 8) return null;
 
-      // ---------------- setup frame ----------------
-      const m = drTrust.findMarker(b, 0x18, (k) => b[k + 1] <= 0x01);
-      const m2 = m >= 0 ? m : drTrust.findMarker(b, 0x1d);
-      const q = drTrust.findMarker(b, 0x23);
-      if (m2 >= 0 && q < 0) {
-        /*
-         * This is command 0xAA, the device-info report — not a "session"
-         * frame, and byte 0 is its package index, not a session id. The scale
-         * sends it within a few seconds of the record channel going live and
-         * the SDK answers it with a 0xB0 reply that echoes that index. We have
-         * never sent that reply.
-         *
-         * The SDK also re-declares the user here, after the device has
-         * introduced itself, so the profile goes out a second time.
-         *
-         * Neither is awaited: this runs inside frame decoding and a write that
-         * stalls must not stall the weight stream.
-         */
-        const pkg = b[0];
-        st.session = pkg;
-        ctx.log(`  Dr Trust: device info (command 0x${b[m2].toString(16)}), package `
-          + `0x${pkg.toString(16)} — acknowledging and re-declaring the user.`, 'ok');
+      /*
+       * Route by the command byte at index 4. No marker search: the bytes this
+       * used to hunt for — 0x18, 0x1d, 0x23 — are the low half of the 16-bit
+       * length field, so the driver was pattern-matching on payload size and
+       * silently dropping any frame whose length it had not seen before.
+       */
+      const cmdByte = b[4];
+      const payloadLen = (b[1] << 8) | b[2];
+      const fragment = b[3];
+      const pkg = b[0];
 
+      // ---------------- device info, 0xAA / 0xA1 ----------------
+      if (cmdByte === 0xaa || cmdByte === 0xa1) {
         /*
-         * Acknowledge, then declare the user once — the order the capture
-         * shows, with the reply carrying package index 0x0b and the user info
-         * 0x0c immediately after it.
+         * The scale introducing itself. Byte 0 is its package index, not a
+         * "session id" — there is no such thing in this protocol. The SDK
+         * answers with a 0xB0 reply echoing that index, then declares the
+         * user once.
          */
+        st.session = pkg;
+        ctx.log(`  Dr Trust: device info (command 0x${cmdByte.toString(16)}), package `
+          + `0x${pkg.toString(16)} — acknowledging, then declaring the user.`, 'ok');
+
         Promise.resolve(drTrust.ack(ctx, pkg))
           .then(() => {
             if (st.profileSent) return null;
@@ -523,125 +518,142 @@
             return drTrust.sendProfile(ctx, st.weightKg || undefined);
           })
           .catch((e) => ctx.log(`  Dr Trust: handshake failed: ${e.message}`, 'warn'));
+
         return {
-          characteristic: 'Dr Trust session setup', spec: 'Dr Trust vendor protocol',
+          characteristic: 'Dr Trust device info', spec: 'Dr Trust vendor protocol',
           raw: BCS.hex(b), units: '', flagBits: [], warnings: [],
-          fields: [field('Frame type', m2, 1, '0x' + b[m2].toString(16), '', 'session setup'),
-                   field('Session id', Math.max(0, m2 - 1), 1, st.session, '', '')],
-          values: { sessionId: st.session },
+          fields: [
+            field('Command', 4, 1, '0x' + cmdByte.toString(16), '', 'device info'),
+            field('Package index', 0, 1, pkg, '', 'echoed back in the acknowledgement'),
+          ],
+          values: { packageIndex: pkg },
         };
       }
 
-      // ---------------- measurement record ----------------
-      // layout (marker j): [j]=0x23 [j+2]=cmd [j+5..j+6]=impedance BE16 (0.1 ohm)
-      //                    [j+8..j+10]=weight BE24, grams
-      if (q < 0 || q + 10 >= b.length) return null;
-      if (st.recordOffset !== q) {
-        st.recordOffset = q;
-        ctx.log(`  Dr Trust: record frames aligned at marker offset ${q}.`, 'info');
+      // ---------------- measurement record, 0xA7 live / 0xA5 history --------
+      if (cmdByte !== 0xa7 && cmdByte !== 0xa5) return null;
+      if (fragment !== 0) {
+        ctx.log(`  Dr Trust: ignoring record fragment ${fragment}; reassembly is not implemented `
+          + 'and no genuine frame has ever needed it.', 'warn');
+        return null;
       }
-      const cmd = b[q + 2];
-      st.live = cmd === 0xa3 || cmd === 0xa7;
-      /*
-       * Bytes [q+3 .. q+6] are a 32-bit Unix timestamp, NOT an impedance.
-       *
-       * This was read as a 16-bit impedance at [q+5] for the whole life of this
-       * driver, and it was wrong. Two live captures settled it: the field held
-       * 0x6a9bfff7 and 0x6a9c0217, which are 2026-09-05T11:41:43Z and
-       * 11:50:47Z — the exact moments those measurements were taken. The scale
-       * echoes back the timestamp sent to it in the profile packet.
-       *
-       * Before the handshake was implemented no timestamp was ever sent, so the
-       * field held uninitialised bytes. In one recording those happened to be
-       * 0x000014b3, which divided by ten looks exactly like a plausible 529.9 Ω.
-       * That coincidence is why the error survived so long.
-       *
-       * So this frame carries a timestamp and a weight and nothing else. No
-       * impedance is reported from it. A body composition panel built on a
-       * clock reading is worse than no panel at all.
-       */
-      /*
-       * Frame type 0x23 has SUBTYPES, at [q+1], and they carry different things:
-       *
-       *   0x00  weight, a device timestamp, and a validity flag
-       *   0x01  the impedances: three little-endian uint16 in tenths of an ohm,
-       *         trunk then right leg then left leg. Whole body is their sum.
-       *   0x02  end of record
-       *
-       * Only the 0x00 frame was ever parsed here, and its timestamp bytes were
-       * read as a 16-bit impedance. Two live captures proved it: the field held
-       * 2026-09-05T11:41:43Z and 11:50:47Z, the exact moments of the readings.
-       * One old recording happened to hold 0x000014b3 there, which divided by
-       * ten looks exactly like a plausible 529.9 ohm, and that coincidence hid
-       * the mistake.
-       *
-       * Layout confirmed against the openScale SSW532 handler, which is the
-       * same protocol family one model down. Offsets there are one lower than
-       * here, because this firmware carries an extra leading header byte.
-       */
-      const subtype = b[q + 1];
-      const stamp = ((b[q + 3] << 24) >>> 0) + (b[q + 4] << 16) + (b[q + 5] << 8) + b[q + 6];
-      const grams = be24(q + 8);
-      const kg = grams / 1000;
-      const valid = b[q + 13] === 0x01;
 
-      // Little-endian, unlike the weight, which is big-endian in the same frame.
-      const le16 = (i) => (b[i + 1] << 8) | b[i];
-      let ohm = 0;
-      if (subtype === 0x01) {
-        const trunk = le16(q + 5) / 10;
-        const rightLeg = le16(q + 7) / 10;
-        const leftLeg = le16(q + 9) / 10;
-        ohm = trunk + rightLeg + leftLeg;
-        st.segments = { trunk, rightLeg, leftLeg };
-        ctx.log(`  Dr Trust: impedance frame — trunk ${trunk} Ω, right leg ${rightLeg} Ω, `
-              + `left leg ${leftLeg} Ω, whole body ${Math.round(ohm * 10) / 10} Ω`, 'ok');
+      /*
+       * The record layout, from ICBleScaleGeneralProtocolV2::decodeUploadData_A5A7
+       * (libICBleProtocol.so @0x135b0c), in frame offsets:
+       *
+       *   [4]        command, 0xA7 live or 0xA5 from memory
+       *   [5..8]     device timestamp, big-endian
+       *   [9..12]    packed word: low 18 bits are grams, the top 14 are flags
+       *   [13]       heart rate
+       *   [14]       N, the number of impedance values THE SCALE DECLARES
+       *   [15..]     N big-endian uint16, tenths of an ohm
+       *
+       * Everything about the old decode of this frame was wrong. It searched
+       * for a "type 0x23" that was the length field, split on a "subtype" that
+       * was the fragment index, and read three LITTLE-endian values at an
+       * offset that in a genuine frame holds the first half of the timestamp.
+       * The three-segment reading — trunk, right leg, left leg — came from a
+       * fabricated fixture and never existed on the wire.
+       *
+       * The count is not three and not ten: it is whatever byte 14 says.
+       */
+      const stamp = ((b[5] << 24) >>> 0) + (b[6] << 16) + (b[7] << 8) + b[8];
+      const packed = ((b[9] << 24) >>> 0) + (b[10] << 16) + (b[11] << 8) + b[12];
+      const grams = packed & 0x3ffff;
+      const kg = Math.round(grams) / 1000;
+      const heartRate = b[13];
+      const count = b[14];
+
+      const impedances = [];
+      let truncated = false;
+      for (let n = 0; n < count; n += 1) {
+        const at = 15 + n * 2;
+        if (at + 1 >= b.length) { truncated = true; break; }
+        impedances.push(((b[at] << 8) | b[at + 1]) / 10);
       }
+      const measured = impedances.filter((v) => v > 0);
+      /*
+       * PROVISIONAL: how these slots combine into one whole-body impedance is
+       * not yet known.
+       *
+       * The count comes off the wire and this scale declares ten. The SDK has
+       * a segmental derivation for six raw values — imp = ((z2+z3+z4+z5) -
+       * 2*z1 - 2*z6) / 4 and so on — but ten is neither six nor a multiple of
+       * it, so that path does not fire and we do not know what the ten mean.
+       * They may be five segments at two frequencies, or five pairs, or
+       * something else again.
+       *
+       * Summing them is a placeholder chosen because it is simple and states
+       * itself plainly, not because it is right. The raw values are reported
+       * alongside so the mapping can be settled by comparing one real reading
+       * against the vendor app's own numbers. Until that happens every derived
+       * figure downstream of this carries the warning below.
+       */
+      const ohm = measured.reduce((a, v) => a + v, 0);
+
+      if (count > 0) {
+        ctx.log(`  Dr Trust: record with ${count} impedance slot(s), `
+          + `${measured.length} non-zero`
+          + (measured.length ? `: ${measured.join(', ')} Ω (sum ${Math.round(ohm * 10) / 10})` : ''),
+        measured.length ? 'ok' : 'warn');
+      }
+
       const csOk = drTrust.checksumOk(b);
       const res = {
         characteristic: 'Dr Trust measurement record',
-        spec: 'Dr Trust SSW532/SSW533 vendor protocol (verified against hardware)',
+        spec: 'Dr Trust SSW533 vendor protocol (decodeUploadData_A5A7)',
         raw: BCS.hex(b), units: 'SI', flagBits: [], warnings: [],
         fields: [
-          field('Command', q + 2, 1, '0x' + cmd.toString(16), '', st.live ? 'live measurement' : 'cached replay'),
-          Object.assign(field('Impedance', q + 5, 6,
-            subtype === 0x01 ? Math.round(ohm * 10) / 10 : null, 'Ω',
-            subtype === 0x01
-              ? `trunk + right leg + left leg, three little-endian uint16 in tenths of an ohm`
-              : 'not present: this subtype carries a timestamp here, not an impedance'),
-          { rawHex: BCS.hex(b.slice(q + 5, q + 11)) }),
-          Object.assign(field('Weight', q + 8, 3, subtype === 0x00 ? kg : null, 'kg',
-          subtype === 0x00 ? `${grams} g, big-endian 24-bit` : 'not present in an impedance frame'),
-        { rawHex: BCS.hex(b.slice(q + 8, q + 11)) }),
-          field('Checksum', b.length - 1, 1, '0x' + b[b.length - 1].toString(16).padStart(2, '0'), '', csOk ? 'valid' : 'INVALID'),
+          field('Command', 4, 1, '0x' + cmdByte.toString(16), '',
+            cmdByte === 0xa7 ? 'live measurement' : 'replayed from the scale\'s memory'),
+          field('Weight', 9, 4, kg, 'kg', `${grams} g, low 18 bits of a packed word`),
+          field('Impedance count', 14, 1, count, '', 'declared by the scale, not assumed'),
+          Object.assign(field('Impedance', 15, count * 2,
+            measured.length ? Math.round(ohm * 10) / 10 : null, 'Ω',
+            measured.length
+              ? `${measured.length} of ${count} slots measured: ${measured.join(', ')}`
+              : `all ${count} slots zero — the sweep did not complete`),
+          { rawHex: BCS.hex(b.slice(15, Math.min(b.length - 1, 15 + count * 2))) }),
+          field('Heart rate', 13, 1, heartRate || null, 'bpm', heartRate ? '' : 'not measured'),
+          field('Checksum', b.length - 1, 1,
+            '0x' + b[b.length - 1].toString(16).padStart(2, '0'), '', csOk ? 'valid' : 'INVALID'),
         ],
         values: {
-          weight: subtype === 0x00 ? kg : undefined,
+          weight: kg > 0 ? kg : undefined,
           impedanceOhm: ohm > 0 ? Math.round(ohm * 10) / 10 : null,
-          subtype,
-          valid,
+          impedanceCount: count,
+          impedances,
+          heartRate: heartRate || null,
           deviceTimestamp: stamp > 1600000000 && stamp < 2200000000 ? stamp : null,
         },
       };
       if (!csOk) res.warnings.push('Checksum mismatch — frame may be corrupt.');
-      /*
-       * Only the 0x00 frame carries a weight. In the 0x01 frame those same
-       * bytes are the second and third impedances, so reading a weight there
-       * produces a nonsense mass and overwrites the real one.
-       */
-      if (subtype === 0x00) {
-        if (!(kg > 0)) { res.warnings.push('Record carries no weight.'); return res; }
-        st.weightKg = kg;
+      if (truncated) {
+        res.warnings.push(`The scale declared ${count} impedance values but the frame ended early; `
+          + `${impedances.length} were read.`);
       }
+      if (payloadLen + 5 !== b.length) {
+        res.warnings.push(`Frame is ${b.length} bytes but declares a ${payloadLen}-byte payload `
+          + `(expected ${payloadLen + 5}).`);
+      }
+
+      if (kg > 0) st.weightKg = kg;
       if (ohm > 0) {
         st.impedanceOhm = Math.round(ohm * 10) / 10;
-      } else if (subtype === 0x00 && !valid) {
-        // The scale itself is saying this reading carries no body composition.
-        res.warnings.push('The scale marked this measurement invalid: it took a weight but no '
-          + 'impedance. Its own program has to run for that, and it did not. Stand with bare '
-          + 'feet on all four metal pads and stay still until the display stops changing.');
+        st.segments = impedances;
+        res.warnings.push(`The scale sent ${measured.length} impedance values `
+          + `(${measured.join(', ')} Ω). How they combine into one whole-body figure is not yet `
+          + 'established, so the sum is used provisionally and every value derived from it should '
+          + 'be checked against the vendor app before it is trusted.');
+      } else if (count > 0) {
+        res.warnings.push(`The scale returned ${count} impedance slots and measured none of them. `
+          + 'Its sweep needs bare feet on all four foot pads and both hands on the handle, '
+          + 'held still until the display stops.');
       }
-      if (!st.live) res.warnings.push(`Replayed from the scale's memory (command 0x${cmd.toString(16)}), not measured live.`);
+      if (cmdByte === 0xa5) {
+        res.warnings.push('Replayed from the scale\'s memory, not measured live.');
+      }
       if (st.impedanceOhm) drTrust.attachBia(res, st, ctx);
       return res;
     },

@@ -227,3 +227,40 @@ module.exports = {
   tmpdir, configDir, seedConfigDir, fixture, fixtureWithoutImpedance, serve, measureOnce,
   byType, first, assertShape,
 };
+
+/**
+ * Build a 0xA7 measurement record the way the scale builds one.
+ *
+ *   [0] package index  [1..2] payload length BE  [3] fragment  [4] 0xA7
+ *   [5..8]   device timestamp BE
+ *   [9..12]  packed word: low 18 bits are grams
+ *   [13]     heart rate
+ *   [14]     N, the impedance count the scale declares
+ *   [15..]   N big-endian uint16, tenths of an ohm
+ *   [last]   (sum of payload) & 0x1F
+ *
+ * Tests used to synthesise these by string-replacing bytes inside a fabricated
+ * frame and leaving the trailer untouched, which produced records no scale
+ * could have sent. Building one and checksumming it is both shorter and
+ * honest.
+ *
+ * @param {object} o
+ * @param {number} o.weightKg
+ * @param {number[]} [o.impedances]  ohms; padded with zeros to `count`
+ * @param {number} [o.count]         slots the scale declares, default 10
+ * @param {number} [o.pkg]
+ * @returns {string} space-separated hex
+ */
+module.exports.recordFrame = function recordFrame({ weightKg, impedances = [], count = 10, pkg = 0x30 }) {
+  const grams = Math.round(weightKg * 1000);
+  const be32 = (v) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+  const slots = [];
+  for (let i = 0; i < count; i += 1) {
+    const tenths = Math.round((impedances[i] || 0) * 10);
+    slots.push((tenths >> 8) & 0xff, tenths & 0xff);
+  }
+  const payload = [0xa7, ...be32(0x14b3), ...be32(grams), 0x00, count, ...slots, 0, 0, 0, 0];
+  const frame = [pkg, (payload.length >> 8) & 0xff, payload.length & 0xff, 0x00, ...payload];
+  frame.push(payload.reduce((a, x) => a + x, 0) & 0x1f);
+  return frame.map((x) => x.toString(16).padStart(2, '0')).join(' ');
+};

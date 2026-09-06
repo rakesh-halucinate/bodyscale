@@ -21,10 +21,10 @@ const FRAMES = {
   // Subtype 0x01: the impedances, three little-endian uint16 in tenths of an
   // ohm — trunk, right leg, left leg — summing to 308.6. The 0x00 frame above
   // carries a weight and a timestamp, and never an impedance.
-  impedance: '07 00 23 01 a7 00 00 04 04 05 04 05 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
+  impedance: '07 00 23 00 a7 00 00 14 b3 00 01 80 c4 00 0a 0c 0e 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 17',
   // 1300.0 ohm, all in the trunk slot: a real number, but outside the plausible
   // band, so the trust rules reject the panel it produces.
-  impedanceBad: '08 00 23 01 a7 00 00 c8 32 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02',
+  impedanceBad: '08 00 23 00 a7 00 00 14 b3 00 01 80 c4 00 0a 32 c8 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 17',
   final:    '76 00 07 00 a2 00 00 01 80 c4 00 07',
 };
 

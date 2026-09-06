@@ -71,39 +71,23 @@ const UNITS_IMPEDANCE_ONLY = {
  * of an ohm at bytes 7..8, and the weight is a big-endian 24-bit gram count at
  * bytes 10..12. Byte 9 is the filler the real device sends between them.
  */
-function recordFrameHex(impedanceTenths, grams) {
-  const be = (n, width) => {
-    const out = [];
-    for (let i = width - 1; i >= 0; i--) out.push(((n >>> (8 * i)) & 0xff).toString(16).padStart(2, '0'));
-    return out.join(' ');
-  };
-  // Subtype 0x00: weight and a timestamp. It carries no impedance — the bytes
-  // once read as one are the low half of that timestamp.
-  return ['30 00 23 00 a7 00 00 00 00 25', be(grams, 3), '00 0a',
-    new Array(24).fill('00').join(' '), '08'].join(' ');
-}
-
 /**
- * Subtype 0x01: the impedances.
+ * One measurement record, the way the scale sends one.
  *
- * Three little-endian uint16 in tenths of an ohm — trunk, right leg, left leg —
- * and the whole-body figure is their sum. Everything is put in the trunk slot
- * here because only the total matters to these cases.
+ * These cases used to build TWO frames: a "subtype 0x00" weight record and a
+ * "subtype 0x01" impedance record. Neither subtype exists. A real record is a
+ * single 0xA7 message carrying the weight and every impedance slot together,
+ * with the slot count declared in byte 14. Building two meant the weight from
+ * one frame and the impedance from another could disagree, which is a state
+ * the hardware cannot produce.
  */
-function impedanceFrameHex(impedanceTenths) {
-  const le = (n) => [(n & 0xff), ((n >>> 8) & 0xff)]
-    .map((x) => x.toString(16).padStart(2, '0')).join(' ');
-  return ['31 00 23 01 a7 00 00', le(impedanceTenths), '00 00 00 00 00 00',
-    new Array(26).fill('00').join(' '), '02'].join(' ');
-}
-
-/** A minimal replay fixture carrying exactly one measurement record. */
 function recordFixture(tag, impedanceTenths, grams) {
   return H.fixture(tag, [
     { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
     { t: 'ready' },
-    { t: 'frame', uuid: '0000ffb3-0000-1000-8000-00805f9b34fb', hex: recordFrameHex(impedanceTenths, grams) },
-    { t: 'frame', uuid: '0000ffb3-0000-1000-8000-00805f9b34fb', hex: impedanceFrameHex(impedanceTenths) },
+    { t: 'frame',
+      uuid: '0000ffb3-0000-1000-8000-00805f9b34fb',
+      hex: H.recordFrame({ weightKg: grams / 1000, impedances: [impedanceTenths / 10] }) },
     { t: 'end', reason: 'finished' },
   ]);
 }

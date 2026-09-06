@@ -23,11 +23,14 @@ const RECORDED_ADDRESS = 'BEECC6EC-BD30-3EAC-B148-4833628A8A58';
 /*
  * The live weights the recording streams, in order.
  *
- * The last entry repeats 97.9 because the subtype 0x01 impedance frame arrives
- * after the weight has settled: it carries no weight of its own, so the held
- * one is streamed again alongside the impedance.
+ * 97.9 appears once. It used to appear twice, because the recording held two
+ * record frames: a weight one and a separate "subtype 0x01 impedance" frame
+ * that repeated the held weight. That second frame was fabricated — under the
+ * protocol's real grammar its fragment index is 1 while it repeats a command
+ * only a fragment 0 carries — and the scale sends exactly one record, with the
+ * weight and the impedances together in it.
  */
-const RECORDED_WEIGHTS = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9, 97.9];
+const RECORDED_WEIGHTS = [69.25, 90, 94.5, 98.65, 97.95, 98.25, 97.9];
 
 const FFB2 = '0000ffb2-0000-1000-8000-00805f9b34fb';
 const FFB3 = '0000ffb3-0000-1000-8000-00805f9b34fb';
@@ -37,8 +40,8 @@ const FFB3 = '0000ffb3-0000-1000-8000-00805f9b34fb';
  */
 const RECORD_FRAME = '30 00 23 00 a7 00 00 00 00 25 01 7e 6c 00 0a 00 00 00 00 00 00 00 00 00 00 '
   + '00 00 00 00 00 00 00 00 00 00 00 00 00 00 08';
-/** Subtype 0x01: trunk, right leg, left leg, summing to 529.9 ohm. */
-const IMPEDANCE_FRAME = '31 00 23 01 a7 00 00 e5 06 e7 06 e7 06 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02';
+/** The single 0xA7 record: 97.9 kg and ten impedance slots summing to 529.9 ohm. */
+const IMPEDANCE_FRAME = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 11 00 00 00 00 0a';
 /** A 0xFFB2 live-weight frame: status 0x01 (settling), 69.25 kg. */
 const SETTLING_FRAME = '3e 00 07 00 a2 01 00 01 0e 82 00 14';
 
@@ -119,7 +122,7 @@ test('INT-PROG-04  every emitted phase is one of the six known phases', async ()
 test('INT-PROG-05  every settling event carries a finite positive weightKg', async () => {
   const { events } = await measureAs('W3');
   const settling = H.byType(events, 'progress').filter((p) => p.phase === 'settling');
-  assert.strictEqual(settling.length, 8,
+  assert.strictEqual(settling.length, 7,
     'seven weight frames plus the impedance frame, which streams the held weight again');
   for (const p of settling) {
     assert.strictEqual(typeof p.weightKg, 'number', `weightKg type for "${p.message}"`);
@@ -399,7 +402,10 @@ test('INT-PROG-19  a locked reading is streamed as the settled phase', async () 
 test('INT-PROG-20  impedanceOhm is null until it arrives, then numeric on the last event', async () => {
   const { events } = await measureAs('IM');
   const weights = weightEvents(events);
-  assert.strictEqual(weights.length, 8, 'seven weight frames plus the impedance frame');
+  // Seven. The impedance no longer arrives in a frame of its own: the scale
+  // sends one record carrying the weight and every impedance slot together,
+  // so the last weight event is the one that carries it.
+  assert.strictEqual(weights.length, 7, 'six live weights plus the record');
   for (const p of weights.slice(0, 6)) {
     assert.strictEqual(p.impedanceOhm, null, `impedance is null at ${p.weightKg} kg`);
   }
@@ -499,7 +505,7 @@ test('INT-PROG-23  a locked weight is frozen and later drift is ignored', async 
 // side that looks like "the Bluetooth disconnects as soon as it has the
 // weight", and it guaranteed a weight-only reading no decode fix could rescue.
 test('INT-PROG-24  the link is held open while the scale measures impedance', async () => {
-  const IMPEDANCE = '31 00 23 01 a7 00 00 e5 06 e7 06 e7 06'
+  const IMPEDANCE = '31 00 23 00 a7 00 00 14 b3 00 01 7e 6c 00 0a 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 12 02 11 00 00 00 00 0a'
     + ' 00'.repeat(27) + ' 02';
   const f = H.fixture('late-impedance', [
     { t: 'log', level: 'info', msg: 'scanning for SSW533' },
