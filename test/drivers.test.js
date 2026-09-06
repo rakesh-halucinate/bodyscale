@@ -567,7 +567,7 @@ test('a record that arrives before anyone stands on the scale is history', async
 
   assert.strictEqual(out[0], null, 'the history upload is not a measurement');
   assert.strictEqual(ctx.state.drt.impedanceOhm, null, 'and nothing is captured from it');
-  assert.ok(ctx.calls.logs.some(([, m]) => /history upload|stored record/i.test(m)),
+  assert.ok(ctx.calls.logs.some(([, m]) => /stored record|before anyone stood/i.test(m)),
     'the run says what it ignored, rather than going quiet');
 });
 
@@ -588,4 +588,35 @@ test('the impedance sweep alone is proof enough that someone is on it', async ()
   const { out } = await feedCold([sweeping, stored]);
   assert.ok(out[1] && out[1].values.impedanceOhm > 0,
     'a record after the sweep is a measurement, however the weight arrived');
+});
+
+/*
+ * 0xA5 is history, 0xA7 is a live measurement, and the protocol has always
+ * drawn that line. Accepting both is why every run came back with the same
+ * bytes as the first successful measurement — same weight to 0.05 kg, same ten
+ * impedances — while the display never showed P-1.
+ *
+ * Gating on "has anyone stood on the scale" was not enough on its own: the
+ * scale sends a second history dump AFTER they have. The command byte is the
+ * fact; that inference was a guess standing in for it.
+ */
+test('a history record is refused even after someone stands on the scale', async () => {
+  const asCmd = (cmd) => {
+    const h = H.recordFrame({ weightKg: 97.55, impedances: H.segmentalFor(605.5) }).split(' ');
+    h[4] = cmd;                       // the command byte lives at frame index 4
+    return h.join(' ');
+  };
+
+  const { ctx, out } = await feedCold([
+    asCmd('a5'),                                        // dumped on connect
+    REAL.rising,                                        // now someone steps on
+    asCmd('a5'),                                        // dumped again
+    asCmd('a7'),                                        // and finally measured
+  ]);
+
+  assert.strictEqual(out[0], null, 'history on connect is refused');
+  assert.strictEqual(out[2], null, 'history after stepping on is refused too');
+  assert.ok(out[3] && out[3].values.impedanceOhm > 0, 'the live record is the reading');
+  assert.ok(ctx.calls.logs.some(([, m]) => /command 0xA5/i.test(m)),
+    'and the run names what it refused, so a log shows which kind arrived');
 });

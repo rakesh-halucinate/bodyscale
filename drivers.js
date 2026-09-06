@@ -182,6 +182,7 @@
         profileSent: false,
         handshakeDone: false, lastLiveKg: 0, writeChain: null, pkg: 0, declarations: 0,
         sweepSeen: false, wireVersion: null, lastRecord: null, liveWeighing: false,
+        historySeen: false,
       };
       /*
        * Subscribe 0xFFB3, then 0xFFB2, then declare the user — unconditionally.
@@ -549,56 +550,41 @@
       if (cmdByte !== 0xa7 && cmdByte !== 0xa5) return null;
 
       /*
-       * A record that arrives before anyone has stood on the scale is history,
-       * not a measurement.
+       * 0xA5 is history. 0xA7 is a live measurement. Only one of them is an
+       * answer to "measure me now".
        *
-       * 0xFFB3 is the record channel, and this firmware uploads whatever it
-       * has stored as soon as that channel opens — before the weight stream
-       * has said anything, before the sweep, before the display shows P-1. We
-       * took that dump as the reading and completed on it, so every run after
-       * the first successful measurement returned that same first measurement:
-       * identical bytes, identical weight, and no P-1 because nothing was ever
-       * measured.
+       * The protocol has always drawn this line and this driver ignored it,
+       * accepting both. The scale uploads its stored record when the record
+       * channel opens, and again after a weighing it declined to perform, so
+       * every run came back with the same bytes as the first successful
+       * measurement — the same weight to 0.05 kg, the same ten impedances —
+       * and the display never showed P-1 because nothing was ever measured.
        *
-       * It only began once the scale HAD something stored, which is why it
-       * looked like a regression in our code and was not.
-       *
-       * So a record counts only after the live stream has seen someone on the
-       * scale. The dump is still logged, because "the scale replayed its last
-       * reading" is worth knowing, but it is not the answer to this request.
+       * Gating on "has anyone stood on the scale" was not enough: the second
+       * dump arrives after they have. The command byte is the fact; the
+       * inference was a guess standing in for it.
        */
-      if (!st.liveWeighing) {
-        ctx.log(`  Dr Trust: ignoring a stored record (command 0x${cmdByte.toString(16)}) `
-          + 'that arrived before anyone stood on the scale — this is its history upload, '
-          + 'not a measurement. Waiting for a live one.', 'warn');
-        return null;
-      }
-      if (fragment !== 0) {
-        ctx.log(`  Dr Trust: ignoring record fragment ${fragment}; reassembly is not implemented `
-          + 'and no genuine frame has ever needed it.', 'warn');
+      if (cmdByte === 0xa5) {
+        if (!st.historySeen) {
+          st.historySeen = true;
+          ctx.log('  Dr Trust: this is a stored record (command 0xA5), not a live '
+            + 'measurement. Ignoring it and waiting for the scale to measure. If it never '
+            + 'does, step off, let the display clear, and step on again.', 'warn');
+        }
         return null;
       }
 
       /*
-       * The record layout, from ICBleScaleGeneralProtocolV2::decodeUploadData_A5A7
-       * (libICBleProtocol.so @0x135b0c), in frame offsets:
-       *
-       *   [4]        command, 0xA7 live or 0xA5 from memory
-       *   [5..8]     device timestamp, big-endian
-       *   [9..12]    packed word: low 18 bits are grams, the top 14 are flags
-       *   [13]       heart rate
-       *   [14]       N, the number of impedance values THE SCALE DECLARES
-       *   [15..]     N big-endian uint16, tenths of an ohm
-       *
-       * Everything about the old decode of this frame was wrong. It searched
-       * for a "type 0x23" that was the length field, split on a "subtype" that
-       * was the fragment index, and read three LITTLE-endian values at an
-       * offset that in a genuine frame holds the first half of the timestamp.
-       * The three-segment reading — trunk, right leg, left leg — came from a
-       * fabricated fixture and never existed on the wire.
-       *
-       * The count is not three and not ten: it is whatever byte 14 says.
+       * A live record still has to follow someone standing on the scale. The
+       * firmware has been seen to send 0xA7 carrying stored values on connect,
+       * before the weight stream has said anything.
        */
+      if (!st.liveWeighing) {
+        ctx.log('  Dr Trust: ignoring a record that arrived before anyone stood on the '
+          + 'scale — waiting for a live one.', 'warn');
+        return null;
+      }
+
       const stamp = ((b[5] << 24) >>> 0) + (b[6] << 16) + (b[7] << 8) + b[8];
       const packed = ((b[9] << 24) >>> 0) + (b[10] << 16) + (b[11] << 8) + b[12];
       const grams = packed & 0x3ffff;
@@ -673,7 +659,7 @@
       }
 
       if (count > 0) {
-        ctx.log(`  Dr Trust: record with ${count} impedance slot(s), `
+        ctx.log(`  Dr Trust: live record (0x${cmdByte.toString(16)}) with ${count} impedance slot(s), `
           + `${measured.length} non-zero`
           + (measured.length ? `: ${measured.join(', ')} Ω (sum ${Math.round(ohm * 10) / 10})` : ''),
         measured.length ? 'ok' : 'warn');
