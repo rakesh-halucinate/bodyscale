@@ -408,6 +408,17 @@
             st.liveWeighing = true;
             ctx.log(`  Dr Trust: the scale has started its impedance sweep (state ${wireState}) — `
               + 'this is the P-1 phase. Holding the link open and staying out of its way.', 'ok');
+            /*
+             * The host needs this one. It is the moment the display shows P-1
+             * and the person has to stand still with both hands on the handle
+             * for about ten seconds. A screen that says nothing here gets let
+             * go of, and the sweep comes back with every slot empty.
+             */
+            if (ctx.phase) {
+              ctx.phase('measuring',
+                'Measuring body composition. Stand still and keep both hands on the handle.',
+                { weightKg: st.weightKg || null, sweepState: wireState });
+            }
           }
           // Emphatically not a final weight: report nothing and keep listening.
           return SUPPRESS;

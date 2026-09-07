@@ -167,6 +167,10 @@ The division of labour is fixed. Your app supplies three facts about the person,
 `age`, `heightCm` and `sex`. This service supplies the connection, the weight,
 the impedance and all twenty-four derived body metrics.
 
+- **[`KIOSK.md`](KIOSK.md)** is the integration flow for an unattended kiosk —
+  the service running ambiently, pushing events as somebody steps on, and the
+  person's own details arriving afterwards at a payment screen. Read this first
+  if you are building the front end.
 - **[`API.md`](API.md)** is the full contract: every command, every event, every
   error code, the meaning and unit of each derived value, and the Windows and
   macOS platform notes.
@@ -212,7 +216,8 @@ so the remembered address is stored under `address_win32` rather than
 | `scales-db.js` | device database, 60+ models mapped to protocol families |
 | `bia.js` | body composition from weight and impedance |
 | `index.html` | the browser version, still works, needs the Chrome flags |
-| `API.md` | the JSON service contract, for porting and integration |
+| `API.md` | the JSON service contract: every command, event and error code |
+| `KIOSK.md` | the kiosk flow: what happens in what order, and who owns which input |
 | `electron-example/` | a working Electron app plus a reusable client |
 | `setup-win.ps1` | Windows setup: virtualenv, bleak, permission check |
 

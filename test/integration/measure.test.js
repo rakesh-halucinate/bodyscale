@@ -84,17 +84,18 @@ function fixtureWithUntrustworthyImpedance(tag) {
 // A measurement that never arrives, or arrives out of order, leaves the Electron
 // app spinning on "stand on the scale" for ever. This pins the whole exchange:
 // greeting, acknowledgement, live progress, then exactly one answer.
-test('INT-MEAS-01  a measure produces hello, accepted, nine progress events and one measurement, in that order', async () => {
+test('INT-MEAS-01  a measure produces hello, accepted, ten progress events and one measurement, in that order', async () => {
   const { events, terminal } = await H.measureOnce({});
   const types = events.map((e) => e.type);
   const upToTerminal = types.slice(0, types.indexOf('measurement') + 1);
 
   assert.deepStrictEqual(upToTerminal, [
     'hello', 'accepted',
-    // connected, ready, then one per live weight. The recording streams seven:
-    // the eighth used to come from a fabricated second record frame.
+    // connected, ready, occupied, then one per live weight. The recording
+    // streams seven weights; `occupied` is the one-shot "somebody stepped on"
+    // signal that a kiosk changes screen on.
     'progress', 'progress', 'progress', 'progress', 'progress',
-    'progress', 'progress', 'progress', 'progress',
+    'progress', 'progress', 'progress', 'progress', 'progress',
     'measurement',
   ]);
   assert.strictEqual(H.byType(events, 'measurement').length, 1, 'exactly one terminal event');
@@ -115,8 +116,8 @@ test('INT-MEAS-02  progress reports connected, ready and each settling weight, t
   // settling event, from a second record frame carrying no weight of its own —
   // fabricated, and gone with the rest of the invented subtype-0x01 shape.
   assert.deepStrictEqual(progress.map((p) => p.phase),
-    ['connected', 'ready', 'settling', 'settling', 'settling', 'settling', 'settling',
-      'settling', 'settling']);
+    ['connected', 'ready', 'occupied', 'settling', 'settling', 'settling', 'settling',
+      'settling', 'settling', 'settling']);
   for (const p of progress) {
     assert.strictEqual(p.id, 'M1', 'every progress event carries the request id');
     assert.strictEqual(p.proto, 1);

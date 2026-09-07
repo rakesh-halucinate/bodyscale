@@ -444,6 +444,20 @@ function measureOnce(opts) {
         note(`  reading ${capture.weight} kg${capture.impedance ? `, ${capture.impedance} ohm` : ''}`
              + `${capture.finalSeen ? ' (settled)' : ' (settling)'}`);
         stopHints();
+        /*
+         * The first real weight is its own event.
+         *
+         * A kiosk sitting on "touch to continue" needs to know somebody has
+         * stepped on, and it needs to know once, not to infer it from the
+         * first of a stream of settling frames. `occupied` fires exactly once
+         * per measurement, carries the weight that triggered it, and is the
+         * signal to change the screen.
+         */
+        if (!capture.occupiedSent && capture.weight > 0) {
+          capture.occupiedSent = true;
+          emit({ phase: 'occupied', weightKg: capture.weight,
+                 message: 'Someone is on the scale. Stand straight and stay still.' });
+        }
         emit({ phase: capture.finalSeen ? 'settled' : 'settling', weightKg: capture.weight,
                impedanceOhm: capture.impedance, message: `${capture.weight} kg` });
       }
@@ -514,6 +528,19 @@ function measureOnce(opts) {
 
     const makeCtx = () => ({
       log: (msg, level) => { if (level !== 'info' || opts.raw) note('  ' + msg); },
+
+      /*
+       * A driver-raised protocol event.
+       *
+       * `log` goes to stderr for a person to read; this goes to the host as a
+       * progress event. The distinction matters for anything driving a screen:
+       * the scale starting its impedance sweep is the moment a kiosk has to
+       * say "hold still", and until now that only existed as a line of text in
+       * a terminal nobody was watching.
+       */
+      phase: (name, message, extra) => {
+        emit(Object.assign({ phase: name, message }, extra || {}));
+      },
       profile: () => opts.profile,
       scalesDb: ScalesDB,
       state: {},

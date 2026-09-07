@@ -732,7 +732,8 @@ test('INT-ROB-21  an unknown transport event type is ignored and the measurement
   assert.strictEqual(events.some((e) => e.type === 'error'), false, 'no error was reported to the host');
   assert.deepStrictEqual(
     progress.map((p) => p.phase).filter((p, i, all) => p !== all[i - 1]),
-    ['connected', 'ready', 'settling'],
+    // occupied fires once between ready and the ladder: the signal a kiosk changes screen on.
+    ['connected', 'ready', 'occupied', 'settling'],
     'the progress phases are exactly those of a clean run');
 });
 

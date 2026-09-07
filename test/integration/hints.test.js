@@ -44,7 +44,8 @@ const T = { timeout: 25000 };
 const CODES = ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON'];
 
 /** The six progress phases (grep for `emit({ phase:` in scale.js). */
-const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready', 'settling', 'settled'];
+const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready',
+  'occupied', 'settling', 'measuring', 'settled'];
 
 const FFB0 = '0000ffb0-0000-1000-8000-00805f9b34fb';
 const FFB2 = '0000ffb2-0000-1000-8000-00805f9b34fb';

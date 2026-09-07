@@ -169,12 +169,30 @@ default it applied. Show the user what it actually used, not what you sent.
 | `found` | Advertisement seen, connecting now. | "Found it" |
 | `connected` | GATT link up. Carries `name` and `address`. | "Connected" |
 | `ready` | Subscribed and listening. | **"Step on the scale"** |
+| `occupied` | **Once**, on the first real weight. Carries `weightKg`. | **Change screen — somebody is on it** |
 | `settling` | A live weight is streaming. Carries `weightKg`. | Show the number, large |
+| `measuring` | The impedance sweep started. Carries `weightKg`, `sweepState`. | **"Hold still, both hands on the handle"** |
 | `settled` | The scale locked the reading. | Freeze the number |
 
 `settling` arrives several times a second while the user shifts their weight.
 Render `weightKg` straight to the screen. It is the same number the scale's own
 display shows.
+
+Treat an unknown `phase` as "still working" rather than falling through to a
+blank screen. This list has grown once and may grow again.
+
+**`occupied` and `measuring` exist for hosts that are not driving the
+measurement themselves** — a kiosk sitting on an idle screen, waiting for
+somebody to step on. Both are derivable from the stream around them, and both
+were added because deriving them is fiddly and getting them wrong is expensive:
+
+- `occupied` fires exactly once per measurement. Without it a host has to
+  recognise the first `settling` of a run and remember it has done so.
+- `measuring` marks the ten seconds the scale's own display shows `P-1`, during
+  which the person must keep both hands on the handle and both bare feet on the
+  pads. The circuit runs hand to foot. Letting go at nine seconds returns a
+  reading with every impedance slot empty, which looks like a broken program and
+  is a broken circuit. A screen that says nothing here gets let go of.
 
 ### `measurement` — the result
 

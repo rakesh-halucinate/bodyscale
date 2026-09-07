@@ -14,7 +14,19 @@ const fs = require('fs');
 const H = require('./harness');
 
 /** The six phases scale.js can emit (grep for `emit({ phase:` in scale.js). */
-const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready', 'settling', 'settled'];
+/*
+ * Every phase a host may see. Two were added for the kiosk flow, where the
+ * service runs ambiently and a screen has to react without being asked:
+ *
+ *   occupied   somebody stepped on, fired once, carrying the weight
+ *   measuring  the impedance sweep started — the display shows P-1 and the
+ *              person has to stand still with both hands on the handle
+ *
+ * A UI that meets an unknown phase falls through to a blank screen, so this
+ * list is the contract and anything outside it is a bug.
+ */
+const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready',
+  'occupied', 'settling', 'measuring', 'settled'];
 
 /** The device the recorded session connects to, as recorded. */
 const RECORDED_ADDRESS = 'BEECC6EC-BD30-3EAC-B148-4833628A8A58';
@@ -58,7 +70,15 @@ function measureAs(id, opts = {}) {
 }
 
 const indexOfType = (events, type) => events.findIndex((e) => e.type === type);
-const weightEvents = (events) => H.byType(events, 'progress').filter((e) => 'weightKg' in e);
+/*
+ * The weight ladder: every live reading, in order.
+ *
+ * `occupied` also carries a weight, but it is a one-shot "somebody stepped on"
+ * signal that repeats the first settling value rather than a rung of its own,
+ * so it is excluded here and tested separately.
+ */
+const weightEvents = (events) => H.byType(events, 'progress')
+  .filter((e) => 'weightKg' in e && e.phase !== 'occupied');
 
 // Prevents: the Electron app showing one person's live weight under another
 // request, because the stream arrived untagged. Without the echoed id the
@@ -104,7 +124,7 @@ test('INT-PROG-03  progress arrives strictly between accepted and the terminal e
 
 // Prevents: the UI hitting an unknown phase string and falling through to a
 // blank screen, or silently ignoring a phase it was never told about.
-test('INT-PROG-04  every emitted phase is one of the six known phases', async () => {
+test('INT-PROG-04  every emitted phase is one this host was told about', async () => {
   const { events } = await measureAs('W2');
   const phases = H.byType(events, 'progress').map((p) => p.phase);
   assert.ok(phases.length >= 5, 'a stream arrived');
@@ -112,7 +132,7 @@ test('INT-PROG-04  every emitted phase is one of the six known phases', async ()
     assert.ok(KNOWN_PHASES.includes(phase), `"${phase}" is a known phase`);
   }
   assert.deepStrictEqual(
-    [...new Set(phases)], ['connected', 'ready', 'settling'],
+    [...new Set(phases)], ['connected', 'ready', 'occupied', 'settling'],
     'the recorded session walks connected then ready then settling',
   );
 });
@@ -280,7 +300,9 @@ test('INT-PROG-14  scanning and found phases are emitted while the radio searche
   const progress = H.byType(events, 'progress');
   assert.deepStrictEqual(
     progress.map((p) => p.phase),
-    ['scanning', 'found', 'connected', 'ready', 'settling', 'settling'],
+    // `occupied` sits between ready and the weight ladder: the one-shot signal
+    // that somebody stepped on, which is what a kiosk changes screen on.
+    ['scanning', 'found', 'connected', 'ready', 'occupied', 'settling', 'settling'],
     'the full phase walk from an idle radio to a reading',
   );
   assert.strictEqual(progress[0].message, 'scanning for SSW533', 'scanning carries the log text');
@@ -389,7 +411,7 @@ test('INT-PROG-19  a locked reading is streamed as the settled phase', async () 
   const progress = H.byType(events, 'progress');
   assert.deepStrictEqual(
     progress.map((p) => p.phase),
-    ['connected', 'ready', 'settling', 'settled', 'settled'],
+    ['connected', 'ready', 'occupied', 'settling', 'settled', 'settled'],
     'the stream flips to settled once the scale locks',
   );
   const settled = progress.filter((p) => p.phase === 'settled');
@@ -435,7 +457,9 @@ test('INT-PROG-21  two sequential measurements each stream under their own id on
   for (const p of before) assert.strictEqual(p.id, 'A', 'first run is tagged A');
   for (const p of after) assert.strictEqual(p.id, 'B', 'second run is tagged B');
   assert.deepStrictEqual(
-    after.filter((p) => 'weightKg' in p).map((p) => p.weightKg), RECORDED_WEIGHTS,
+    // The ladder only: `occupied` repeats the first rung as a one-shot signal.
+    after.filter((p) => 'weightKg' in p && p.phase !== 'occupied').map((p) => p.weightKg),
+    RECORDED_WEIGHTS,
     'the second run streams the same recorded weights, not a continuation of the first',
   );
 });
@@ -540,4 +564,50 @@ test('INT-PROG-24  the link is held open while the scale measures impedance', as
   const hint = H.byType(events, 'hint').find((h) => h.code === 'STAY_ON_SCALE');
   assert.ok(hint, 'and the user is told to stay onrather than left watching nothing');
   assert.match(hint.message, /stay on the scale/i);
+});
+
+/*
+ * The kiosk contract, in the two events it turns on.
+ *
+ * A host that drives its own measurement can derive both of these from the
+ * stream around them. A kiosk sitting on an idle screen cannot: it has to know
+ * that somebody stepped on, once, and it has to know when the scale started
+ * its sweep, because that is the ten seconds during which the person must keep
+ * both hands on the handle. A screen that says nothing there gets let go of,
+ * and the sweep comes back with every impedance slot empty.
+ */
+test('INT-PROG-25  occupied fires exactly once, on the first real weight', async () => {
+  const { events } = await measureAs('K1');
+  const occupied = H.byType(events, 'progress').filter((e) => e.phase === 'occupied');
+
+  assert.strictEqual(occupied.length, 1, 'once per measurement, however many weights stream');
+  assert.strictEqual(occupied[0].weightKg, RECORDED_WEIGHTS[0],
+    'carrying the weight that triggered it');
+  assert.match(occupied[0].message, /on the scale/i, 'and text a screen can show');
+
+  // It must arrive before the ladder, or a kiosk changes screen too late.
+  const phases = H.byType(events, 'progress').map((p) => p.phase);
+  assert.ok(phases.indexOf('occupied') < phases.indexOf('settling'),
+    'before the weight stream, not after it');
+  assert.ok(phases.indexOf('ready') < phases.indexOf('occupied'),
+    'and after the scale is ready');
+});
+
+test('INT-PROG-26  measuring marks the sweep, so a screen can say hold still', async () => {
+  // A live frame in state 3: the scale has started its impedance program.
+  const replay = H.fixture('prog-sweep', [
+    { t: 'device', name: 'SSW533', address: 'AA:BB:CC:DD:EE:FF' },
+    { t: 'ready' },
+    { t: 'frame', uuid: FFB2, hex: SETTLING_FRAME },
+    { t: 'frame', uuid: FFB2, hex: '30 00 07 00 a2 03 00 01 80 c4 00 00' },
+    { t: 'frame', uuid: FFB3, hex: RECORD_FRAME },
+    { t: 'end', reason: 'finished' },
+  ]);
+  const { events } = await measureAs('K2', { replay });
+  const sweep = H.byType(events, 'progress').filter((e) => e.phase === 'measuring');
+
+  assert.strictEqual(sweep.length, 1, 'once, when the sweep starts');
+  assert.ok([2, 3].includes(sweep[0].sweepState), 'carrying the state that identifies it');
+  assert.match(sweep[0].message, /hands on the handle/i,
+    'and text that names what the person must actually do');
 });

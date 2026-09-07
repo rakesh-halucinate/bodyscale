@@ -238,20 +238,23 @@ test('INT-CLI-05  progress arrives as a progress event and again under its phase
   try {
     await client.start();
     const progress = [];
-    const named = { connected: [], ready: [], settling: [] };
+    const named = { connected: [], ready: [], occupied: [], settling: [] };
     client.on('progress', (p) => progress.push(p));
     for (const phase of Object.keys(named)) client.on(phase, (p) => named[phase].push(p));
 
     const res = await client.measure(H.PROFILE);
 
+    // occupied fires once between ready and the ladder: the signal a kiosk changes screen on.
     assert.deepStrictEqual([...new Set(progress.map((p) => p.phase))],
-      ['connected', 'ready', 'settling'],
+      ['connected', 'ready', 'occupied', 'settling'],
       'the recorded session walks connected, ready, then live weights');
     assert.strictEqual(named.connected.length, 1, 'one connected event');
     assert.strictEqual(named.ready.length, 1, 'one ready event');
     assert.ok(named.settling.length >= 2, `live weights streamed (${named.settling.length})`);
+    assert.strictEqual(named.occupied.length, 1, 'one occupied event, fired once');
     assert.strictEqual(
-      named.connected.length + named.ready.length + named.settling.length,
+      named.connected.length + named.ready.length
+        + named.occupied.length + named.settling.length,
       progress.length,
       'every progress event was re-emitted under its phase name, and none twice');
     assert.strictEqual(named.connected[0], progress.find((p) => p.phase === 'connected'),

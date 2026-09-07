@@ -483,7 +483,8 @@ test('INT-ELEC-12  live progress and service logs reach the renderer while measu
   const phases = progress.map((p) => p.payload.phase);
   assert.deepStrictEqual(phases.slice(0, 2), ['connected', 'ready'],
     `the connect and "stand on the scale" phases arrive first, saw [${phases.join(', ')}]`);
-  assert.deepStrictEqual([...new Set(phases.slice(2))], ['settling'],
+  // occupied fires once between ready and the ladder: the signal a kiosk changes screen on.
+  assert.deepStrictEqual([...new Set(phases.slice(2))], ['occupied', 'settling'],
     'and everything after them is a settling reading');
 
   const live = progress.filter((p) => typeof p.payload.weightKg === 'number' && p.payload.weightKg > 0);
