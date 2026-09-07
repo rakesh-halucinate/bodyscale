@@ -356,85 +356,53 @@ async function main() {
    * reading, which is where the details belong. The measurement itself is still
    * deferred: nothing is computed until the details are given.
    */
+  /*
+   * Nobody is asked anything before measuring.
+   *
+   * The scale is handed a fixed placeholder during the handshake, and that is
+   * enough. Measured rather than assumed: one reading told the truth
+   * (male, 39, 180) and the next told it a 70-year-old, 140 cm woman was
+   * standing there. Same person, back to back.
+   *
+   *   told the truth   97.55 kg   609.2 Ω   26.7, 327.2, 333.3, 322.7, ...
+   *   told a lie       97.55 kg   604.6 Ω   26.6, 325.8, 333.3, 320.3, ...
+   *
+   * Identical to the gram and within 0.8% on impedance, which is a tenth of
+   * the drift between two honest readings hours apart. What the scale is told
+   * changes what IT displays, not what it measures or sends.
+   *
+   * This is the design that was asked for and that I removed, wrongly, after
+   * blaming a placeholder for a failure that was really the driver accepting
+   * the scale's history upload as a measurement. The evidence is above; the
+   * blame was not.
+   */
+  const HANDSHAKE = { sex: 'male', age: 39, heightCm: 180 };
+  let who = { sex: 'male', age: 39, heightCm: 180 };   // defaults for the prompts, not the scale
   const WHO_FILE = require('path').join(ROOT, 'logs', 'profile.json');
-  const readWho = () => {
-    try {
-      const w = JSON.parse(require('fs').readFileSync(WHO_FILE, 'utf8'));
-      if (w && w.sex && w.age > 0 && w.heightCm > 0) return w;
-    } catch (e) { /* first run, or unreadable */ }
-    return null;
-  };
+  try {
+    const w = JSON.parse(require('fs').readFileSync(WHO_FILE, 'utf8'));
+    if (w && w.sex && w.age > 0 && w.heightCm > 0) who = w;
+  } catch (e) { /* first run */ }
   const saveWho = (w) => {
     try {
       require('fs').mkdirSync(require('path').dirname(WHO_FILE), { recursive: true });
       require('fs').writeFileSync(WHO_FILE, JSON.stringify(w, null, 2) + '\n');
-    } catch (e) { /* not being able to remember is not worth failing over */ }
+    } catch (e) { /* not remembering is not worth failing over */ }
   };
-
-  let who = readWho();
-  if (who) {
-    say('');
-    say(`  ${C.dim}measuring ${who.heightCm} cm, ${who.age}y, ${who.sex} `
-      + `— remembered, and sent to the scale before you step on${C.off}`);
-  } else {
-    say('');
-    say(`  ${C.bold}Who is the scale measuring?${C.off}`);
-    say(`  ${C.dim}Asked once. The scale needs a real identity during the handshake or it${C.off}`);
-    say(`  ${C.dim}replays its last record instead of measuring. Remembered from here on.${C.off}`);
-    who = {
-      sex: await askValid(`  Sex ${C.dim}[male]${C.off} `, {
-        parse: (v) => v.toLowerCase(), fallback: 'male',
-        valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
-      }),
-      age: await askValid('  Age  ', {
-        parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
-        hint: 'Enter an age between 5 and 120.',
-      }),
-      heightCm: await askValid('  Height in cm  ', {
-        parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
-        hint: 'Enter a height between 90 and 250 cm.',
-      }),
-    };
-    saveWho(who);
-  }
 
   for (;;) {
     // ---------------------------------------------------------------- IDLE
     state('IDLE', 'nothing is being read');
     say(`  ${C.dim}In the app this is the "Measure Me" button.${C.off}`);
-    say(`  ${C.dim}measuring ${who.heightCm} cm, ${who.age}y, ${who.sex}${C.off}`);
-    const go = await ask(`  ${C.bold}Press Enter to Measure Me${C.off} `
-      + `${C.dim}(p to change person, q to quit)${C.off} `);
+    const go = await ask(`  ${C.bold}Press Enter to Measure Me${C.off} ${C.dim}(q to quit)${C.off} `);
     if (go.toLowerCase() === 'q') break;
 
     /*
-     * Somebody else's turn.
-     *
-     * The identity goes to the scale during the handshake, before anyone
-     * stands on it, so measuring a second person with the first one's details
-     * hands the scale the wrong height and age for the whole measurement. The
-     * results entered afterwards would be right and the sweep would have been
-     * run for someone else.
+     * There is no "change person" step any more, because there is nothing to
+     * change: the scale is handed the same placeholder whoever is standing on
+     * it, and the person is identified afterwards, when the panel is computed.
+     * A second person just presses Enter and enters their own details.
      */
-    if (go.toLowerCase() === 'p') {
-      say('');
-      who = {
-        sex: await askValid(`  Sex ${C.dim}[${who.sex}]${C.off} `, {
-          parse: (v) => v.toLowerCase(), fallback: who.sex,
-          valid: (v) => v === 'male' || v === 'female', hint: 'Enter male or female.',
-        }),
-        age: await askValid('  Age  ', {
-          parse: Number, valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
-          hint: 'Enter an age between 5 and 120.',
-        }),
-        heightCm: await askValid('  Height in cm  ', {
-          parse: Number, valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
-          hint: 'Enter a height between 90 and 250 cm.',
-        }),
-      };
-      saveWho(who);
-      continue;
-    }
 
     // ----------------------------------------------------------- CAPTURING
     state('CAPTURING', 'step on the scale');
@@ -468,7 +436,7 @@ async function main() {
         secondProgramWaitSec: Number(arg('--second-program', 0)),
         // Written to the scale during the handshake, and used for nothing
         // else: the reading stays deferred until details are entered below.
-        scaleProfile: who,
+        scaleProfile: HANDSHAKE,
       });
     } catch (err) {
       clearLive();

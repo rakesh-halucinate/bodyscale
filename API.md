@@ -960,3 +960,27 @@ A host that has an age should send it. A host whose user would rather not give
 one gets a complete body-composition panel and loses two metrics and a safety
 net, which is a better trade than inventing an age and reporting a BMR that
 looks measured.
+
+### The handshake identity does not affect the measurement
+
+`scaleProfile` is written to the scale before anyone stands on it, and it is
+tempting to assume the sweep depends on it. It does not. Measured directly:
+two readings of the same person, back to back, the first telling the scale the
+truth and the second telling it a 70-year-old, 140 cm woman was standing there.
+
+    told the truth   97.55 kg   609.2 Ω   26.7, 327.2, 333.3, 322.7, 345.3, ...
+    told a lie       97.55 kg   604.6 Ω   26.6, 325.8, 333.3, 320.3, 345.5, ...
+
+Identical to the gram, 0.8% apart on impedance — a tenth of the drift between
+two honest readings taken hours apart. What the scale is told changes what IT
+DISPLAYS, and what the vendor's phone app records, but not what it measures or
+sends over Bluetooth.
+
+So a host does not need any personal data before a measurement. Send a fixed,
+well-formed placeholder as `scaleProfile`, capture the reading, and collect sex
+and height afterwards for `compute`. The one reason to send the real thing is
+if the person will also read the scale's own screen or use the vendor app,
+both of which compute from what they were given.
+
+What the scale DOES require is a well-formed frame with the impedance bit set.
+That is the driver's job and is not optional; it is the contents that are free.

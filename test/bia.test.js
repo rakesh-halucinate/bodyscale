@@ -186,3 +186,40 @@ test('sex still changes everything, which is why it is not optional', () => {
     `sex must move body fat by more than 10%, moved ${shift.toFixed(1)}% — if this `
     + 'ever falls, the case for requiring sex needs rechecking');
 });
+
+/*
+ * Measured, not assumed: the identity written to the scale during the
+ * handshake does not change what it measures.
+ *
+ * Two readings of the same person, back to back. The first told the scale the
+ * truth; the second told it a 70-year-old, 140 cm woman was standing there.
+ *
+ *   told the truth   97.55 kg   609.2 Ω   26.7, 327.2, 333.3, 322.7, 345.3, ...
+ *   told a lie       97.55 kg   604.6 Ω   26.6, 325.8, 333.3, 320.3, 345.5, ...
+ *
+ * Identical to the gram, 0.8% apart on impedance — a tenth of the drift
+ * between two honest readings hours apart. So the handshake identity affects
+ * what the scale DISPLAYS, not what it sends, and nobody needs to be asked
+ * anything before standing on it.
+ *
+ * This is here rather than in a comment because it is the evidence for a
+ * design decision that was made, reversed on a wrong diagnosis, and remade.
+ */
+test('the two handshake readings agree, which is why no profile is asked for first', () => {
+  const truth = { weightKg: 97.55, impedanceOhm: 609.2, heightCm: 180, age: 39, sex: 'male' };
+  const lie = { ...truth, impedanceOhm: 604.6 };
+
+  const a = BIA.estimate(truth).values;
+  const b = BIA.estimate(lie).values;
+
+  const gap = Math.abs(a.bodyFatPercent - b.bodyFatPercent);
+  assert.ok(gap <= 0.5,
+    `body fat differed by ${gap.toFixed(1)} points between the two handshakes; anything `
+    + 'larger and the identity would be load-bearing after all');
+
+  // And both land where the vendor app does for this person.
+  for (const v of [a, b]) {
+    assert.ok(Math.abs(v.bodyFatPercent - 40.7) <= 1,
+      `${v.bodyFatPercent}% should sit near the app's 40.7%`);
+  }
+});
