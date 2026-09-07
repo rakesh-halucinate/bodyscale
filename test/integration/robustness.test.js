@@ -502,7 +502,7 @@ test('INT-ROB-13  the strings NaN and Infinity are rejected as an invalid profil
     send({ id: 'A-INF', cmd: 'measure', profile: { age: 'Infinity', heightCm: 180, sex: 'male' } });
     send({ id: 'A-NEGINF', cmd: 'measure', profile: { age: '-Infinity', heightCm: 180, sex: 'male' } });
     send({ id: 'H-INF', cmd: 'measure', profile: { age: 39, heightCm: 'Infinity', sex: 'male' } });
-    send({ id: 'A-EMPTY', cmd: 'measure', profile: { age: '', heightCm: 180, sex: 'male' } });
+
   });
 
   assert.deepStrictEqual(signature(r.events), [
@@ -510,15 +510,12 @@ test('INT-ROB-13  the strings NaN and Infinity are rejected as an invalid profil
     ['A-INF', 'error', 'INVALID_PROFILE'],
     ['A-NEGINF', 'error', 'INVALID_PROFILE'],
     ['H-INF', 'error', 'INVALID_PROFILE'],
-    ['A-EMPTY', 'error', 'INVALID_PROFILE'],
     ['ALIVE', 'status', null],
   ], 'every unreal number was refused before anything was spawned');
 
   const msg = (id) => r.events.find((e) => e.id === id).message;
-  assert.strictEqual(msg('A-NAN'), 'age must be a number between 5 and 120');
-  assert.strictEqual(msg('A-INF'), 'age must be a number between 5 and 120');
-  assert.strictEqual(msg('A-EMPTY'), 'age must be a number between 5 and 120',
-    'an empty string coerces to 0, which is below the floor');
+  assert.strictEqual(msg('A-NAN'), 'age must be a number between 5 and 120, or omitted');
+  assert.strictEqual(msg('A-INF'), 'age must be a number between 5 and 120, or omitted');
   assert.strictEqual(msg('H-INF'), 'heightCm must be a number between 90 and 250',
     'the message names the field that was wrong');
   assert.strictEqual(r.events.some((e) => e.type === 'accepted'), false,
@@ -557,6 +554,8 @@ test('INT-ROB-14  a null, missing or non-object profile is INVALID_PROFILE with 
 // unhandled property access instead of a named validation failure.
 test('INT-ROB-15  a profile sent as an array is rejected, and the message names the field it could not find', async () => {
   const r = await afterHostileInput((send) => {
+    // Height is reported first now: it is required, and age is not, so the
+    // validator checks the mandatory field before the optional one.
     send({ id: 'P-ARR', cmd: 'measure', profile: ['male', 39, 180] });
     send({ id: 'P-EMPTYARR', cmd: 'measure', profile: [] });
   });
@@ -569,7 +568,9 @@ test('INT-ROB-15  a profile sent as an array is rejected, and the message names 
   for (const e of errorsIn(r.events)) {
     // An array is typeof 'object' and truthy, so it clears the first check and
     // fails on the fields it does not have. That is what the code does today.
-    assert.strictEqual(e.message, 'age must be a number between 5 and 120',
+    // Height, because it is the first REQUIRED field checked. Age is optional
+    // now, so an array that has neither fails on the one that matters.
+    assert.strictEqual(e.message, 'heightCm must be a number between 90 and 250',
       'the failure is reported against the missing field, not as "profile is required"');
   }
   assert.strictEqual(r.events.some((e) => e.type === 'accepted'), false,

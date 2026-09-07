@@ -398,7 +398,7 @@ test('INT-SYNC-11  a bad profile during a running measurement is refused INVALID
   assert.strictEqual(bad.type, 'error');
   assert.strictEqual(bad.code, 'INVALID_PROFILE',
     'profile validation is checked before the busy check');
-  assert.strictEqual(bad.message, 'age must be a number between 5 and 120');
+  assert.strictEqual(bad.message, 'age must be a number between 5 and 120, or omitted');
 
   const done = onlyTerminal(events, 'M1', 'INT-SYNC-11');
   assert.strictEqual(done.type, 'measurement');

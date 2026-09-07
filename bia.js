@@ -124,7 +124,31 @@
       inputs: Object.assign({}, p), values: {}, meta: {}, warnings: [], flags: [],
       trust: { impedanceFree: false, impedanceDerived: false }, omitted: {},
     };
+    /*
+     * Values that genuinely need an age are withheld without one.
+     *
+     * Each says what age does to it, so a host can tell a value missing
+     * because nobody could compute it from one missing because a field was
+     * left blank. The composition panel is unaffected: body fat, fat mass,
+     * fat-free mass, muscle, water and BMI are identical at 25 and at 60.
+     */
+    const NEEDS_AGE = {
+      bodyFatPercentBmiAnchor:
+        'Deurenberg 1991 takes age as a term and it moves this figure by 16% across an adult '
+        + 'range, so without one it would be a guess wearing a measurement\'s clothes.',
+      bmrKcal:
+        'Mifflin-St Jeor takes age directly, about 5 kcal a year and 5% across an adult range. '
+        + 'Weight, height and sex cannot stand in for it.',
+      bmrAlternatesKcal: 'Every one of these equations takes age.',
+      skeletalMuscleMassKg: 'Janssen 2000 takes age as a term, worth about 5%.',
+      skeletalMusclePercent: 'Derived from skeletal muscle mass, which needs an age.',
+      skeletalMuscleIndex: 'Derived from skeletal muscle mass, which needs an age.',
+      bodyFatGapPoints:
+        'The distance between the impedance figure and the BMI one, and the BMI one needs an '
+        + 'age. Without it there is nothing to compare against.',
+    };
     const put = (key, value, unit, confidence, note) => {
+      if (!hasAge && NEEDS_AGE[key] !== undefined) return;
       out.values[key] = value;
       out.meta[key] = { unit: unit || '', confidence, note: note || '' };
     };
@@ -134,7 +158,35 @@
     };
 
     const W = Number(p.weightKg);
-    const heightCm = Number(p.heightCm), age = Number(p.age);
+    const heightCm = Number(p.heightCm);
+
+    /*
+     * Age is optional, and what it costs is specific.
+     *
+     * It touches nothing in the composition panel — body fat, fat mass,
+     * fat-free mass, muscle, water and BMI are all identical at 25 and 60.
+     * What it does reach, measured on one real reading across that span:
+     *
+     *   bodyFatGapPoints          41.5%     drives the trust cross-check
+     *   bodyFatPercentBmiAnchor   16.6%     the comparison the check uses
+     *   bmrKcal                    5.5%
+     *   skeletalMuscleMassKg       5.4%
+     *   boneMassKg                 1.8%
+     *   proteinMassKg              0.5%
+     *
+     * So the first four are withheld without an age rather than computed
+     * against an invented one, and the cross-check that depends on them does
+     * not run. The last two shift by less than the rounding on the panel, so
+     * they are computed against a mid-range age and say so.
+     *
+     * The alternative — defaulting to 30 or 40 and reporting a BMR — hands
+     * back a number that looks measured and is not, which is the failure mode
+     * this file exists to avoid.
+     */
+    const hasAge = p.age !== undefined && p.age !== null && p.age !== ''
+      && Number.isFinite(Number(p.age));
+    const age = hasAge ? Number(p.age) : 40;         // mid-range, for the <2% terms only
+    if (!hasAge) Object.assign(out.omitted, NEEDS_AGE);
     const male = String(p.sex).toLowerCase() === 'male';
     const S = male ? 1 : 0;
     const sexKey = male ? 'male' : 'female';
@@ -256,15 +308,35 @@
     const combinedSee = Math.sqrt(4.1 * 4.1 + ffmSee * ffmSee);
     put('bodyFatGapPoints', round(gap, 1), 'points', 'derived-literature',
       `difference between the impedance and BMI methods; one standard error is ${round(combinedSee, 1)}`);
-    out.crossCheck = { impedanceBased: round(fatPct, 1), bmiBased: round(deurenberg, 1), gapPoints: round(gap, 1),
-                       oneSigma: round(combinedSee, 1), twoSigma: round(2 * combinedSee, 1) };
+    /*
+     * The cross-check needs an age, so without one it does not run.
+     *
+     * It compares the impedance figure against Deurenberg's BMI estimate, and
+     * that estimate takes age as a term worth 16% across an adult range. Run
+     * against an assumed age it would reject good readings and pass bad ones,
+     * on a comparison nobody supplied the inputs for — and T3 is fatal, so it
+     * would silently withdraw trust from a measurement that deserved it.
+     *
+     * Losing it costs a real safety net. That is stated rather than hidden:
+     * every impedance-derived value stays, and the reading says the check was
+     * skipped and why.
+     */
+    if (!hasAge) {
+      out.crossCheck = null;
+      out.warnings.push('The body-fat cross-check did not run: it compares the impedance figure '
+        + 'against a BMI-based one, and that needs an age. The impedance figure is reported '
+        + 'without that second opinion, so treat it with more caution than usual.');
+    } else {
+      out.crossCheck = { impedanceBased: round(fatPct, 1), bmiBased: round(deurenberg, 1), gapPoints: round(gap, 1),
+                         oneSigma: round(combinedSee, 1), twoSigma: round(2 * combinedSee, 1) };
+    }
 
-    if (gap > 2 * combinedSee) {
+    if (hasAge && gap > 2 * combinedSee) {
       flag('T3', 'fatal', `Impedance gives ${round(fatPct, 1)}% body fat while the BMI method gives ${round(deurenberg, 1)}%. `
         + `A ${round(gap, 1)} point gap is beyond two standard errors, so the impedance figure is not usable.`);
       out.trust.impedanceDerived = false;
     } else if (gap > combinedSee) {
-      flag('T8', 'warn', `The two body fat methods differ by ${round(gap, 1)} points, a little over one standard error.`);
+      if (hasAge) flag('T8', 'warn', `The two body fat methods differ by ${round(gap, 1)} points, a little over one standard error.`);
     }
     const ffmiCeiling = male ? 25.0 : 22.0;
     if (ffmi > ffmiCeiling) {

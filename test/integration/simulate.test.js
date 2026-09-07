@@ -269,7 +269,7 @@ test('INT-SIM-08  an invalid age is rejected with its range, and is not used', a
     run({ script: ['', 'male', '3', '39', '180', 'q'] }),
     run({ script: FULL }),
   ]);
-  assert.match(rejected.stdout, /Enter an age between 5 and 120\./);
+  assert.match(rejected.stdout, /Enter an age between 5 and 120, or 'skip'\./);
   assert.deepStrictEqual(states(rejected.stdout),
     ['IDLE', 'CAPTURING', 'HELD', 'COMPUTING', 'IDLE']);
 

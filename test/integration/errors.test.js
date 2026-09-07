@@ -256,9 +256,12 @@ test('INT-ERR-07  each way of getting the profile wrong is INVALID_PROFILE, nami
     { id: 'no-profile', req: {}, message: 'profile is required' },
     { id: 'profile-null', req: { profile: null }, message: 'profile is required' },
     { id: 'profile-string', req: { profile: 'male,39,180' }, message: 'profile is required' },
-    { id: 'age-missing', req: { profile: { heightCm: 180, sex: 'male' } }, message: 'age must be a number between 5 and 120' },
-    { id: 'age-too-low', req: { profile: { age: 4, heightCm: 180, sex: 'male' } }, message: 'age must be a number between 5 and 120' },
-    { id: 'age-too-high', req: { profile: { age: 121, heightCm: 180, sex: 'male' } }, message: 'age must be a number between 5 and 120' },
+    // A missing age is no longer an error: it costs BMR, skeletal muscle and
+    // the BMI cross-check, and those are withheld with a reason. An age that
+    // is present and impossible still is one.
+    { id: 'age-absurd', req: { profile: { heightCm: 180, sex: 'male', age: 200 } }, message: 'age must be a number between 5 and 120, or omitted' },
+    { id: 'age-too-low', req: { profile: { age: 4, heightCm: 180, sex: 'male' } }, message: 'age must be a number between 5 and 120, or omitted' },
+    { id: 'age-too-high', req: { profile: { age: 121, heightCm: 180, sex: 'male' } }, message: 'age must be a number between 5 and 120, or omitted' },
     { id: 'height-missing', req: { profile: { age: 39, sex: 'male' } }, message: 'heightCm must be a number between 90 and 250' },
     { id: 'height-too-low', req: { profile: { age: 39, heightCm: 89, sex: 'male' } }, message: 'heightCm must be a number between 90 and 250' },
     { id: 'height-too-high', req: { profile: { age: 39, heightCm: 251, sex: 'male' } }, message: 'heightCm must be a number between 90 and 250' },
@@ -312,7 +315,7 @@ test('INT-ERR-08  a bad profile sent during a run reports INVALID_PROFILE, not B
   const err = r.events.find((e) => e.type === 'error' && e.id === 'BAD');
   assertErrorEnvelope(err, hello, 'bad profile while busy');
   assert.strictEqual(err.code, 'INVALID_PROFILE');
-  assert.strictEqual(err.message, 'age must be a number between 5 and 120');
+  assert.strictEqual(err.message, 'age must be a number between 5 and 120, or omitted');
   assert.notStrictEqual(err.code, 'BUSY', 'the caller must learn the profile is wrong');
 });
 

@@ -69,10 +69,42 @@ test('INT-PROF-03  a null profile and an array profile are both rejected', async
 
 // Prevents: BMR and the body-fat cross-check being computed from a missing age,
 // which silently becomes NaN and poisons every figure downstream.
-test('INT-PROF-04  age is required and the message names it', async () => {
+/*
+ * Age is optional; sex and height are not, and the difference is measured.
+ * Holding one real reading fixed, sex male -> female moves body fat by 12.3%
+ * and skeletal muscle by 13.9%, while age 25 -> 60 moves body fat by 0.0%.
+ * Age reaches only BMR, skeletal muscle and the BMI anchor, and those are
+ * withheld with a reason rather than computed against an invented age.
+ */
+test('INT-PROF-04  a measurement without an age succeeds, minus what needs one', async () => {
   const r = await attempt({ heightCm: 180, sex: 'male' });
-  assert.strictEqual(r.terminal.code, 'INVALID_PROFILE');
-  assert.match(r.terminal.message, /age/, `message names the field: ${r.terminal.message}`);
+  assert.strictEqual(r.terminal.type, 'measurement',
+    `expected a measurement, got ${JSON.stringify(r.terminal).slice(0, 120)}`);
+
+  // The composition panel is untouched by age and must all be there.
+  for (const k of ['bodyFatPercent', 'fatMassKg', 'fatFreeMassKg', 'muscleMassKg',
+    'bodyWaterLitres', 'boneMassKg', 'proteinMassKg', 'bmi']) {
+    assert.ok(k in r.terminal.derived, `${k} does not depend on age and must survive`);
+  }
+  // What genuinely needs one is absent, and says why.
+  for (const k of ['bmrKcal', 'skeletalMuscleMassKg', 'bodyFatPercentBmiAnchor',
+    'bodyFatGapPoints']) {
+    assert.ok(!(k in r.terminal.derived), `${k} needs an age and must be withheld`);
+    assert.ok(r.terminal.omitted[k], `${k} must say why it is missing`);
+    assert.match(r.terminal.omitted[k], /age/i);
+  }
+  // And the cross-check cannot run, which is worth being told.
+  assert.strictEqual(r.terminal.crossCheck, null);
+  assert.ok(r.terminal.warnings.some((w) => /cross-check did not run/i.test(w)),
+    'a lost safety net is stated, not silently dropped');
+});
+
+test('INT-PROF-04b  a nonsense age is still refused, because it is a mistake', async () => {
+  for (const age of [3, 200, 'forty']) {
+    const r = await attempt({ heightCm: 180, sex: 'male', age });
+    assert.strictEqual(r.terminal.code, 'INVALID_PROFILE', `age ${age} must be refused`);
+    assert.match(r.terminal.message, /age/, `message names the field: ${r.terminal.message}`);
+  }
 });
 
 // Prevents: BMI and every height-normalised index being wrong without warning.
@@ -113,10 +145,12 @@ test('INT-PROF-07  heightCm is accepted at 90 and 250 and refused at 89 and 251'
 // Prevents: a form field arriving as text and being coerced to NaN somewhere
 // deep in the maths rather than refused at the door.
 test('INT-PROF-08  non-numeric age and height are refused', async () => {
+  // `age: null` is now an omission, not garbage, and is tested as such in
+  // INT-PROF-04. Everything here is still a mistake: a value that was meant to
+  // be an age and is not one.
   const bad = [
     { age: 'thirty-nine', heightCm: 180 },
     { age: 39, heightCm: 'tall' },
-    { age: null, heightCm: 180 },
     { age: 39, heightCm: null },
     { age: {}, heightCm: 180 },
     { age: 'NaN', heightCm: 180 },

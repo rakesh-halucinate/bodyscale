@@ -511,7 +511,7 @@ test('INT-ELEC-13  a bad profile comes back as a typed failure, not a throw', as
   const r = await call('scale:measure', { age: 2, heightCm: 180 });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 'INVALID_PROFILE');
-  assert.strictEqual(r.message, 'age must be a number between 5 and 120',
+  assert.strictEqual(r.message, 'age must be a number between 5 and 120, or omitted',
     'the service\'s own explanation survives the crossing');
   assert.strictEqual(r.detail, null);
 

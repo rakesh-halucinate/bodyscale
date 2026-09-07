@@ -909,3 +909,54 @@ drives the numbers stays deferred and editable afterwards.
 
 Validation is the same as `profile`; a malformed one is refused with
 `INVALID_PROFILE` rather than quietly replaced by the stand-in.
+
+### `profile.age` is optional; `sex` and `heightCm` are not
+
+A `measure` or `compute` request may omit `age`, send it as `null`, or send it
+as an empty string — a blank form field is an omission, not a mistake. An age
+that is present and impossible is still refused with `INVALID_PROFILE`.
+
+This is not symmetry with the other fields, and the difference is measured. On
+one real reading, holding everything else fixed:
+
+| changing | body fat | muscle | skeletal muscle |
+|---|---|---|---|
+| sex, male to female | **+12.3 %** | −8.8 % | −13.9 % |
+| height, ±5 cm | ±4.7 % | ±4 % | ±4 % |
+| age, ±20 years | **0.0 %** | 0.1 % | 5.4 % |
+
+Sex is a term inside the body-fat equation rather than a correction applied
+after it, so a wrong or guessed one corrupts the whole panel. Height enters as
+height squared over impedance. Age reaches neither.
+
+**What omitting `age` costs.** These keys are absent from `derived` and present
+in `omitted` with the reason:
+
+    bmrKcal                    Mifflin-St Jeor takes age directly, ~5% per 20 years
+    bmrAlternatesKcal          every alternative equation takes age
+    skeletalMuscleMassKg       Janssen 2000 takes age, ~5%
+    skeletalMusclePercent      derived from it
+    skeletalMuscleIndex        derived from it
+    bodyFatPercentBmiAnchor    Deurenberg 1991 takes age, ~16%
+    bodyFatGapPoints           the distance to that anchor
+
+`crossCheck` is `null` and a warning says so. That check is what decides
+whether the impedance figure is trustworthy — it compares against the BMI
+estimate — so without an age the reading arrives without that second opinion.
+Rule T3, which is fatal, cannot fire. Everything else is unchanged:
+`bodyFatPercent`, `fatMassKg`, `fatFreeMassKg`, `muscleMassKg`,
+`bodyWaterLitres`, `boneMassKg`, `proteinMassKg`, `bmi` and their derivatives
+are identical whether an age was given or not.
+
+Bone and protein depend on age so weakly — 1.8% and 0.5% across an adult range,
+below the rounding shown on a panel — that they are computed against a
+mid-range age rather than withheld.
+
+```json
+{ "cmd": "measure", "profile": { "sex": "male", "heightCm": 180 } }
+```
+
+A host that has an age should send it. A host whose user would rather not give
+one gets a complete body-composition panel and loses two metrics and a safety
+net, which is a better trade than inventing an age and reporting a BMR that
+looks measured.

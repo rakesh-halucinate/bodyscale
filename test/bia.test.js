@@ -108,3 +108,81 @@ test('the visceral rating is an integer clamped to 1..20', () => {
   // which is the whole reason this must not be shown as a percentage.
   assert.strictEqual(at(160, 800), 20, 'a very high fat mass saturates at 20');
 });
+
+/*
+ * Age is optional; sex and height are not, and the asymmetry is measured.
+ * Holding one real reading fixed, sex male -> female moves body fat by 12.3%
+ * while age 25 -> 60 moves it by 0.0%. Age reaches only BMR, skeletal muscle
+ * and the BMI anchor that the trust cross-check compares against.
+ */
+test('without an age the composition panel is unchanged', () => {
+  const base = { weightKg: 97.7, impedanceOhm: 606.4, heightCm: 180, sex: 'male' };
+  const withAge = BIA.estimate({ ...base, age: 39 }).values;
+  const noAge = BIA.estimate(base).values;
+
+  // Exactly identical: age is nowhere in the equations behind these.
+  for (const k of ['bodyFatPercent', 'fatMassKg', 'fatFreeMassKg', 'fatFreeMassIndex',
+    'bodyWaterLitres', 'bodyWaterPercent', 'bmi']) {
+    assert.strictEqual(noAge[k], withAge[k], `${k} must not depend on age at all`);
+  }
+
+  /*
+   * Not quite identical: bone mass carries a small age term, worth 1.8% across
+   * an adult range and below the rounding a panel shows. Rather than withhold
+   * bone — and muscle and protein with it, since both are derived from it —
+   * they are computed against a mid-range age. The cost is a hundredth of a
+   * kilogram, and it must stay that small.
+   */
+  for (const k of ['muscleMassKg', 'boneMassKg', 'proteinMassKg']) {
+    const drift = Math.abs(noAge[k] - withAge[k]);
+    assert.ok(drift <= 0.05,
+      `${k} drifted ${drift.toFixed(3)} kg on a mid-range age; anything larger means it `
+      + 'should be withheld rather than assumed');
+  }
+});
+
+test('what needs an age is withheld with a reason, not guessed at', () => {
+  const r = BIA.estimate({ weightKg: 97.7, impedanceOhm: 606.4, heightCm: 180, sex: 'male' });
+
+  for (const k of ['bmrKcal', 'bmrAlternatesKcal', 'skeletalMuscleMassKg',
+    'skeletalMusclePercent', 'skeletalMuscleIndex', 'bodyFatPercentBmiAnchor',
+    'bodyFatGapPoints']) {
+    assert.ok(!(k in r.values), `${k} takes age as a term and must be withheld`);
+    assert.ok(r.omitted[k], `${k} must say why it is absent`);
+    assert.match(r.omitted[k], /age/i);
+  }
+
+  /*
+   * The cross-check is the real cost. It compares the impedance figure against
+   * Deurenberg's BMI estimate, which takes age as a term worth 16% across an
+   * adult range — run against an assumed age it would reject good readings and
+   * pass bad ones, and T3 is fatal, so it would withdraw trust silently.
+   */
+  assert.strictEqual(r.crossCheck, null, 'the check cannot run');
+  assert.ok(!r.flags.some((f) => f.rule === 'T3' || f.rule === 'T8'),
+    'and neither rule that depends on it fires');
+  assert.ok(r.warnings.some((w) => /cross-check did not run/i.test(w)),
+    'losing a safety net is said out loud');
+});
+
+test('a blank age is an omission; an impossible one is still a mistake', () => {
+  const base = { weightKg: 97.7, impedanceOhm: 606.4, heightCm: 180, sex: 'male' };
+  // A blank form field means "not given", which is what a host actually sends.
+  for (const age of [undefined, null, '']) {
+    const r = BIA.estimate({ ...base, age });
+    assert.ok(!('bmrKcal' in r.values), `age ${JSON.stringify(age)} reads as omitted`);
+    assert.ok(r.values.bodyFatPercent > 0, 'and the panel still computes');
+  }
+  // A real age is used.
+  assert.ok('bmrKcal' in BIA.estimate({ ...base, age: 39 }).values);
+});
+
+test('sex still changes everything, which is why it is not optional', () => {
+  const base = { weightKg: 97.7, impedanceOhm: 606.4, heightCm: 180, age: 39 };
+  const m = BIA.estimate({ ...base, sex: 'male' }).values;
+  const f = BIA.estimate({ ...base, sex: 'female' }).values;
+  const shift = Math.abs((f.bodyFatPercent - m.bodyFatPercent) / m.bodyFatPercent) * 100;
+  assert.ok(shift > 10,
+    `sex must move body fat by more than 10%, moved ${shift.toFixed(1)}% — if this `
+    + 'ever falls, the case for requiring sex needs rechecking');
+});

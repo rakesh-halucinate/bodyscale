@@ -143,7 +143,9 @@ test('INT-DEFER-07  compute validates the measured pair it is handed', async () 
 // Prevents: computing a panel for a person whose age was never actually given,
 // which is the whole failure this feature exists to avoid.
 test('INT-DEFER-08  compute still requires a complete profile', async () => {
-  for (const profile of [undefined, {}, { age: 39 }, { heightCm: 180 }, { age: 2, heightCm: 180 }]) {
+  // `{ heightCm: 180 }` is no longer incomplete: age is optional, and what it
+  // costs is withheld with a reason rather than refused outright.
+  for (const profile of [undefined, {}, { age: 39 }, { age: 2, heightCm: 180 }]) {
     const { events } = await H.serve({
       onEvent: (ev, send) => {
         if (ev.type === 'hello') {

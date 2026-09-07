@@ -95,7 +95,8 @@ test('client: an invalid profile rejects with a typed ScaleError', async () => {
   await withClient(async (client) => {
     await client.start();
     await assert.rejects(
-      () => client.measure({ heightCm: 180 }),
+      // An impossible age, not a missing one: age is optional now.
+      () => client.measure({ heightCm: 180, age: 200 }),
       (err) => {
         assert.ok(err instanceof ScaleError, 'it is a ScaleError');
         assert.strictEqual(err.code, 'INVALID_PROFILE');

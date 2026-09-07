@@ -442,7 +442,7 @@ test('INT-CLI-11  a rejected request leaves the client usable for the next one',
 
     const bad = await rejection(client.measure({ age: 900, heightCm: 180, sex: 'male' }));
     assert.strictEqual(bad.code, 'INVALID_PROFILE');
-    assert.strictEqual(bad.message, 'age must be a number between 5 and 120');
+    assert.strictEqual(bad.message, 'age must be a number between 5 and 120, or omitted');
     assert.strictEqual(bad.detail, null);
     assert.strictEqual(client.busy, false, 'a refused profile never owned the flag');
 

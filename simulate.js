@@ -498,11 +498,24 @@ async function main() {
       valid: (v) => v === 'male' || v === 'female',
       hint: 'Enter male or female.',
     });
-    const age = await askValid(`  Age ${C.dim}[${who.age}]${C.off} `, {
-      parse: Number, fallback: who.age,
-      valid: (v) => Number.isFinite(v) && v >= 5 && v <= 120,
-      hint: 'Enter an age between 5 and 120.',
+    /*
+     * Age can be skipped. Sex and height cannot.
+     *
+     * Age reaches only BMR, skeletal muscle and the BMI cross-check; body fat,
+     * fat mass, lean mass, muscle, water and BMI are identical at 25 and 60.
+     * Sex moves body fat by 12% on the same body, so it is asked for either
+     * way.
+     */
+    const age = await askValid(`  Age ${C.dim}[${who.age}, or 'skip']${C.off} `, {
+      parse: (v) => (String(v).toLowerCase() === 'skip' ? null : Number(v)),
+      fallback: who.age,
+      valid: (v) => v === null || (Number.isFinite(v) && v >= 5 && v <= 120),
+      hint: "Enter an age between 5 and 120, or 'skip'.",
     });
+    if (age === null) {
+      say(`  ${C.dim}without an age: BMR, skeletal muscle and the body-fat cross-check`);
+      say(`  ${C.dim}are withheld. Everything else is unaffected.${C.off}`);
+    }
     const heightCm = await askValid(`  Height in cm ${C.dim}[${who.heightCm}]${C.off} `, {
       parse: Number, fallback: who.heightCm,
       valid: (v) => Number.isFinite(v) && v >= 90 && v <= 250,
@@ -511,13 +524,14 @@ async function main() {
 
     // ------------------------------------------------------------- RESULT
     // What was just entered is who the scale measures next time.
-    who = { sex, age, heightCm };
+    // A skipped age is not remembered as an answer; the previous one stands.
+    who = { sex, age: age === null ? who.age : age, heightCm };
     saveWho(who);
 
     state('COMPUTING', 'no radio, no waiting');
     try {
       const result = await client.compute(
-        captured.measured, { sex, age, heightCm },
+        captured.measured, { sex, heightCm, ...(age === null ? {} : { age }) },
         { measuredAt: captured.timestamp, model: captured.model, device: captured.device });
       say('');
       renderResult(result);

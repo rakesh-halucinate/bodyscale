@@ -128,7 +128,8 @@ test('serve: accepted precedes progress, and progress precedes the result', asyn
 
 test('serve: a bad profile is rejected before any radio work starts', async () => {
   const cases = [
-    [{ heightCm: 180 }, 'age'],
+    // A missing age is no longer a rejection; an impossible one still is.
+    [{ heightCm: 180, age: 200 }, 'age'],
     [{ age: 39 }, 'heightCm'],
     [{ age: 2, heightCm: 180 }, 'age'],
     [{ age: 39, heightCm: 40 }, 'heightCm'],
