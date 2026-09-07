@@ -60,18 +60,40 @@ if ($node) {
 # ----------------------------------------------------------------- 3. Python
 $py = $null
 foreach ($probe in @(
-    @{ Cmd = 'py';     Args = @('-3', '--version') },
-    @{ Cmd = 'python'; Args = @('--version') })) {
+    @{ Cmd = 'py';     Sw = @('-3') },
+    @{ Cmd = 'python'; Sw = @() })) {
   $cmd = Get-Command $probe.Cmd -ErrorAction SilentlyContinue
   if (-not $cmd) { continue }
-  try { $out = & $probe.Cmd @($probe.Args) 2>&1 } catch { continue }
+  try { $out = & $probe.Cmd @($probe.Sw + @('--version')) 2>&1 } catch { continue }
   if ($out -match '(\d+)\.(\d+)\.(\d+)') {
     $major = [int]$Matches[1]; $minor = [int]$Matches[2]
     if ($major -eq 3 -and $minor -ge 9) {
-      $pyExe  = $probe.Cmd
-      $pyArgs = if ($probe.Cmd -eq 'py') { @('-3') } else { @() }
+      # Resolve the real interpreter and use THAT from here on, rather than
+      # carrying the launcher and its -3 around.
+      #
+      # `py -3 --version` reports a version happily and then `py -3 -m venv`
+      # fails with "Unknown option: -3" on some installs — the launcher passes
+      # its own switch through to python.exe, which has never heard of it. The
+      # previous version of this script blamed the Microsoft Store for that,
+      # which sent people to reinstall a Python that was working perfectly.
+      #
+      # sys.executable is unambiguous, needs no switches, and is the
+      # interpreter the virtual environment should be built from anyway.
+      $resolved = & $probe.Cmd @($probe.Sw + @(
+        '-c', 'import sys; print(sys.executable)')) 2>&1 | Select-Object -Last 1
+      if ($LASTEXITCODE -eq 0 -and $resolved -and (Test-Path $resolved)) {
+        $pyExe  = "$resolved".Trim()
+        $pyArgs = @()
+        Good "Python $($Matches[0])  $pyExe"
+      } else {
+        # Could not resolve it: fall back to the command as found, switches and
+        # all, which is what used to happen every time.
+        $pyExe  = $probe.Cmd
+        $pyArgs = $probe.Sw
+        Good "Python $($Matches[0])"
+        Warn "Could not resolve the interpreter path; using '$($probe.Cmd)' as found."
+      }
       $py = $true
-      Good "Python $($Matches[0])"
       break
     }
     Warn "Found Python $($Matches[0]), which is too old. 3.9+ is required."
@@ -98,9 +120,53 @@ if ($py) {
     Say "Reusing the existing environment at .venv"
   } else {
     Say "Creating .venv"
-    & $pyExe @($pyArgs + @('-m', 'venv', $venv))
+    Say "  using $pyExe"
+
+    # Keep what Python said. The previous version discarded it and guessed at
+    # the Microsoft Store, which is one cause among several and reads as a
+    # diagnosis rather than the guess it was. venv failures are specific and
+    # the message almost always names the real problem.
+    $venvOut = & $pyExe @($pyArgs + @('-m', 'venv', $venv)) 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $venvPy)) {
-      Die "Could not create the virtual environment. If Python came from the Microsoft Store, install it from python.org instead; the Store build restricts what scripts may do."
+      $hint = ''
+      if ($pyExe -match 'WindowsApps') {
+        $hint = @"
+
+This Python came from the Microsoft Store ($pyExe). The Store build runs in a
+sandbox that cannot create a working virtual environment here. Install Python
+from https://www.python.org/downloads/windows/ instead, ticking
+"Add python.exe to PATH", then run this script again.
+"@
+      } elseif ($venvOut -match 'ensurepip|No module named venv') {
+        $hint = @"
+
+This Python was built without the venv or ensurepip module. On a python.org
+install both are present; a stripped or embedded build has neither. Install
+from python.org, or re-run with -Embed for a private copy.
+"@
+      } elseif ($venvOut -match 'Access is denied|PermissionError|WinError 5') {
+        $hint = @"
+
+Windows refused to write into $Root. Either the folder is read-only, or an
+antivirus is blocking it, or this is a protected location such as Program
+Files. Clone the repository somewhere under your user folder and try again.
+"@
+      } elseif ($venvOut -match 'already exists|not empty') {
+        $hint = @"
+
+A .venv folder is already there but has no python.exe in it, so a previous run
+was interrupted. Delete it and run this script again:
+
+    Remove-Item -Recurse -Force "$venv"
+"@
+      }
+
+      Die @"
+Could not create the virtual environment.
+
+What Python said:
+$($venvOut.Trim())$hint
+"@
     }
     Good "Created .venv"
   }
@@ -110,8 +176,11 @@ if ($py) {
   & $venvPy -m pip install --quiet --upgrade bleak
   if ($LASTEXITCODE -ne 0) { Die "pip could not install bleak. Check the network, or a proxy that intercepts TLS." }
 
-  $ver = & $venvPy -c "import bleak; print(bleak.__version__)" 2>&1
-  if ($LASTEXITCODE -ne 0) { Die "bleak installed but will not import: $ver" }
+  # bleak has no __version__ attribute; asking for one turns a working install
+  # into "bleak installed but will not import", which is both wrong and alarming.
+  # importlib.metadata is where the version actually lives.
+  $ver = & $venvPy -c "import bleak, importlib.metadata as m; print(m.version('bleak'))" 2>&1
+  if ($LASTEXITCODE -ne 0) { Die "bleak installed but will not import:`n$ver" }
   Good "bleak $ver"
 
   # Prove the WinRT backend actually loads. An import that works on Linux can
