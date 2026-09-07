@@ -32,6 +32,8 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const H = require('./harness');
@@ -41,7 +43,17 @@ const { BodyScaleClient } = require(H.CLIENT);
 const T = { timeout: 25000 };
 
 /** The two codes the service documents, and nothing else. */
-const CODES = ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON'];
+/*
+ * Every hint code, in the order `hello` advertises them.
+ *
+ * This started as two and grew to five without the advertisement following,
+ * which meant STAY_ON_SCALE — the code that drives a kiosk's "hold still while
+ * it measures" screen — could be sent to a host that had never been told it
+ * existed. INT-HINT-20 now checks this list against what the source can
+ * actually emit, so the two cannot drift apart again.
+ */
+const CODES = ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON', 'HOLD_STILL',
+  'STAY_ON_SCALE', 'SECOND_PROGRAM'];
 
 /** The six progress phases (grep for `emit({ phase:` in scale.js). */
 const KNOWN_PHASES = ['scanning', 'found', 'connected', 'ready',
@@ -675,9 +687,43 @@ test('INT-HINT-23  hello advertises the hint contract', T, async () => {
   H.assertShape(assert, hello.hints, {
     codes: 'array', defaultAfterSec: 'number', note: 'string',
   }, 'hello.hints');
-  assert.deepStrictEqual(hello.hints.codes, CODES, 'the two documented codes, in order');
+  assert.deepStrictEqual(hello.hints.codes, CODES, 'every documented code, in order');
   assert.strictEqual(hello.hints.defaultAfterSec, 8);
   assert.ok(hello.hints.note.length > 20, 'the note says what a hint is');
   assert.match(hello.hints.note, /[Aa]dvisory/, 'and that it is advisory');
   assert.match(hello.hints.note, /never ends a measurement/, 'and that it never ends a measurement');
+});
+
+/*
+ * Every hint code the service can send must be advertised in `hello`.
+ *
+ * A host reads that list to decide what it can branch on, so a code that ships
+ * without appearing there is a code nobody handles. Three had been added and
+ * none reached the advertisement — including STAY_ON_SCALE, which is what
+ * drives a kiosk's "hold still while it measures" screen.
+ *
+ * Read out of the source rather than out of a list kept beside it, because a
+ * second list is a second thing to forget.
+ */
+test('INT-HINT-20  hello advertises every hint code the service can emit', async () => {
+  const src = fs.readFileSync(path.join(H.ROOT, 'scale.js'), 'utf8');
+
+  const emitted = new Set();
+  // Hints are raised two ways: armed for a repeating nudge, or emitted once.
+  for (const m of src.matchAll(/armHint\('([A-Z_]+)'/g)) emitted.add(m[1]);
+  for (const m of src.matchAll(/_hint:\s*true,\s*code:\s*'([A-Z_]+)'/g)) emitted.add(m[1]);
+  assert.ok(emitted.size >= 4, `found ${emitted.size} hint codes in the source; the scan broke`);
+
+  const { events } = await H.serve({ onEvent: (ev) => ev.type === 'hello' });
+  const advertised = new Set(H.first(events, 'hello').hints.codes);
+
+  const missing = [...emitted].filter((c) => !advertised.has(c));
+  assert.deepStrictEqual(missing, [],
+    `these codes can be sent but are not advertised: ${missing.join(', ')}`);
+
+  // And nothing advertised that cannot happen, which would be just as
+  // misleading in the other direction.
+  const phantom = [...advertised].filter((c) => !emitted.has(c));
+  assert.deepStrictEqual(phantom, [],
+    `these codes are advertised but never sent: ${phantom.join(', ')}`);
 });

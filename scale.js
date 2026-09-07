@@ -1005,7 +1005,17 @@ async function serve(a) {
     events: ['hello', 'accepted', 'progress', 'hint', 'measurement',
              'status', 'cancelling', 'forgotten', 'bye', 'error'],
     hints: {
-      codes: ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON'],
+      /*
+       * Every code this service can send, not just the two it started with.
+       *
+       * A host reads this list to decide what it can branch on, so a code that
+       * ships without appearing here is a code nobody handles. HOLD_STILL,
+       * STAY_ON_SCALE and SECOND_PROGRAM were all added and none reached the
+       * advertisement — the kiosk's "hold still while it measures" screen is
+       * driven by one of them.
+       */
+      codes: ['WAKE_THE_SCALE', 'STEP_OFF_AND_ON', 'HOLD_STILL',
+              'STAY_ON_SCALE', 'SECOND_PROGRAM'],
       defaultAfterSec: 8,
       note: 'Advisory only. A hint never ends a measurement; it names the one thing '
           + 'the person can do to unstick it, and repeats until they do.',
