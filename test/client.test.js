@@ -361,3 +361,44 @@ test('client: the env option reaches the service', async () => {
     assert.ok(require('fs').existsSync(file), 'the service wrote its config where it was told');
   } finally { await client.stop(); }
 });
+
+/*
+ * The pairing pair, as an Electron admin panel will call them.
+ *
+ * `scan` needs a radio and cannot run here — macOS kills a Bluetooth request
+ * from a process whose responsible app lacks the entitlement, which is why the
+ * launchers say to run them from Terminal. What is testable is that the client
+ * exposes both, that they reach the service, and that a paired device is
+ * remembered and reported back.
+ */
+test('client: the client pairs a device and reports it as remembered', async () => {
+  await withClient(async (client) => {
+    await client.start();
+
+    const paired = await client.pair('AA:BB:CC:DD:EE:FF', 'SSW533');
+    assert.strictEqual(paired.device.address, 'AA:BB:CC:DD:EE:FF');
+    assert.strictEqual(paired.device.name, 'SSW533');
+
+    const status = await client.status();
+    assert.ok(status.device, 'the service now reports a remembered device');
+    assert.strictEqual(status.device.address, 'AA:BB:CC:DD:EE:FF');
+
+    await client.forget();
+    const after = await client.status();
+    assert.ok(!after.device || !after.device.address,
+      'and forget lets go of it, so the next measurement scans by name');
+  });
+});
+
+test('client: pairing without an address rejects as a typed error', async () => {
+  await withClient(async (client) => {
+    await client.start();
+    await assert.rejects(
+      () => client.pair(''),
+      (err) => {
+        assert.strictEqual(err.code, 'BAD_REQUEST');
+        assert.match(err.message, /address/i, 'the message names what is missing');
+        return true;
+      });
+  });
+});

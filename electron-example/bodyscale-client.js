@@ -218,6 +218,38 @@ class BodyScaleClient extends EventEmitter {
   forget() { return this._request({ cmd: 'forget' }, { resolveOn: 'forgotten' }); }
 
   /**
+   * List what is advertising nearby, connecting to nothing.
+   *
+   * For an admin pairing screen: a kiosk cannot ask a customer which Bluetooth
+   * device to use, so the scale is chosen once by whoever installs it.
+   * Rejected with BUSY while a measurement is running, since both want the
+   * radio.
+   *
+   * Devices arrive strongest-signal first, unnamed last. `supported` marks the
+   * ones with a driver — show the rest anyway, because a scale advertising
+   * under an unfamiliar name is exactly the case somebody is installing.
+   *
+   * @param {number} [seconds] 1 to 60, default 8
+   * @returns {Promise<{devices: Array, supported: string[]}>}
+   */
+  scan(seconds = 8) {
+    return this._request({ cmd: 'scan', seconds }, { resolveOn: 'devices' });
+  }
+
+  /**
+   * Remember a device, so every measurement connects straight to it.
+   *
+   * Writes the address the measurement path already reads. Calling it again
+   * replaces the remembered device; `forget()` drops it.
+   *
+   * @param {string} address from a `scan` result
+   * @param {string} [name] for display only
+   */
+  pair(address, name) {
+    return this._request({ cmd: 'pair', address, name }, { resolveOn: 'paired' });
+  }
+
+  /**
    * Shut the service down and wait for the process to go.
    *
    * Closing stdin is the reliable half: the service exits when its parent's

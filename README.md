@@ -219,6 +219,7 @@ so the remembered address is stored under `address_win32` rather than
 | `API.md` | the JSON service contract: every command, event and error code |
 | `KIOSK.md` | the kiosk flow: what happens in what order, and who owns which input |
 | `electron-example/` | a working Electron app plus a reusable client |
+| `pair.command` | find the scale and remember it — what the kiosk admin screen does |
 | `setup-win.ps1` | Windows setup: virtualenv, bleak, permission check |
 
 ## Browser version
