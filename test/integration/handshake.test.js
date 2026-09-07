@@ -213,13 +213,13 @@ test('INT-HS-02  hello carries exactly its documented fields, with the right typ
 
 // Prevents: the Electron app offering a button for a command the service does
 // not have, or hiding one it does — the command list is the host's menu.
-test('INT-HS-03  hello declares the six commands the service accepts', async () => {
+test('INT-HS-03  hello declares every command the service accepts', async () => {
   const { events } = await H.serve({
     env: { BODYSCALE_CONFIG_DIR: emptyConfigDir('hs03') },
     onEvent: (ev) => ev.type === 'hello',
   });
   const hello = H.first(events, 'hello');
-  assert.deepStrictEqual(hello.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']);
+  assert.deepStrictEqual(hello.commands, ['measure', 'compute', 'scan', 'pair', 'cancel', 'status', 'forget', 'shutdown']);
 });
 
 // Prevents: the host writing a message for an error code the service can emit
@@ -651,3 +651,67 @@ test('INT-HS-23  the transport under --replay is replay.js, and ble.py is never 
       await svc.exit;
     }
   });
+
+/*
+ * Pairing, for an admin screen.
+ *
+ * A kiosk cannot ask a customer which Bluetooth device to use, so the scale is
+ * chosen once by whoever installs it and remembered from then on. `pair`
+ * writes the address the measurement path already reads, so a paired kiosk
+ * never scans by name again.
+ */
+test('INT-HS-30  pair remembers a chosen device, and forget lets go of it', async () => {
+  const dir = H.configDir('pairing');
+  const { events } = await H.serve({
+    configDir: dir,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') {
+        send({ id: 'P', cmd: 'pair', address: 'AA:BB:CC:DD:EE:FF', name: 'SSW533' });
+        return false;
+      }
+      if (ev.type === 'paired') { send({ id: 'S', cmd: 'status' }); return false; }
+      return ev.type === 'status';
+    },
+  });
+
+  const paired = H.first(events, 'paired');
+  assert.ok(paired, 'pair is answered');
+  assert.strictEqual(paired.device.address, 'AA:BB:CC:DD:EE:FF');
+  assert.strictEqual(paired.device.name, 'SSW533');
+
+  // And the service now reports it as remembered, which is what stops the
+  // next measurement scanning by name.
+  const status = H.first(events, 'status');
+  assert.ok(status.device, 'the device is remembered');
+  assert.strictEqual(status.device.address, 'AA:BB:CC:DD:EE:FF');
+});
+
+test('INT-HS-31  pair without an address is refused, not silently ignored', async () => {
+  const { events } = await H.serve({
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') { send({ id: 'B', cmd: 'pair' }); return false; }
+      return ev.type === 'error';
+    },
+  });
+  const err = H.first(events, 'error');
+  assert.strictEqual(err.code, 'BAD_REQUEST');
+  assert.match(err.message, /address/i, 'the message names what is missing');
+});
+
+test('INT-HS-32  scan is refused while a measurement is running', async () => {
+  // Both want the radio. Saying so beats two processes fighting over it.
+  const { events } = await H.serve({
+    replay: H.FIXTURE,
+    onEvent: (ev, send) => {
+      if (ev.type === 'hello') {
+        send({ id: 'M', cmd: 'measure', profile: H.PROFILE });
+        return false;
+      }
+      if (ev.type === 'accepted') { send({ id: 'S', cmd: 'scan', seconds: 2 }); return false; }
+      return ev.type === 'error' && ev.id === 'S';
+    },
+  });
+  const err = H.first(events, 'error');
+  assert.ok(err, 'the scan is answered rather than left hanging');
+  assert.strictEqual(err.code, 'BUSY');
+});

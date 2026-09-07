@@ -210,7 +210,10 @@ test('the transport attaches on the first matching advertisement', () => {
   assert.match(py, /advertisement from .* after .* ms/, 'timing the attach so a delay is visible');
   // Address and name must be matched in the SAME scan; a two-phase search can
   // miss an entire advertising burst.
-  const fn = py.slice(py.indexOf('async def find_device'), py.indexOf('async def run('));
+  // To the NEXT function, not to run(): `discover` now sits between them, and
+  // slicing past it would test the wrong body.
+  const fnStart = py.indexOf('async def find_device');
+  const fn = py.slice(fnStart, py.indexOf('async def ', fnStart + 10));
   assert.match(fn, /want_addr/);
   assert.match(fn, /want_name/);
   assert.equal((fn.match(/BleakScanner\(/g) || []).length, 1, 'exactly one scanner');

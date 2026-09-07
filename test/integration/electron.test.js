@@ -371,7 +371,7 @@ test('INT-ELEC-07  scale:start reports a hello, and starting again is idempotent
   assert.strictEqual(first.hello.type, 'hello');
   assert.strictEqual(first.hello.app, 'bodyscale');
   assert.strictEqual(first.hello.platform, process.platform);
-  assert.deepStrictEqual(first.hello.commands, ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown']);
+  assert.deepStrictEqual(first.hello.commands, ['measure', 'compute', 'scan', 'pair', 'cancel', 'status', 'forget', 'shutdown']);
   assert.deepStrictEqual(first.hello.errorCodes, H.ALL_ERROR_CODES);
 
   const mark = pushed.length;

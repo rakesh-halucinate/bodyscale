@@ -280,6 +280,72 @@ let QUIET = false;
 let LOG_ALWAYS = false;
 const note = (msg) => { if (!QUIET || LOG_ALWAYS) process.stderr.write(msg + '\n'); };
 
+/*
+ * List what is advertising, without connecting to anything.
+ *
+ * Runs the transport in --discover mode, which scans for a fixed window and
+ * exits. Nothing is connected to and nothing is written, so this is safe to
+ * run from an admin screen while a kiosk is idle.
+ *
+ * Each device is tagged `supported` when the scales database recognises its
+ * name. The host should still show the rest: a scale advertising under an
+ * unfamiliar name is exactly the case somebody is installing, and hiding it
+ * would make the screen useless for the one job it has.
+ */
+function scanForDevices(a, seconds) {
+  return new Promise((resolve, reject) => {
+    const py = spawn(a.python || PYTHON,
+      [path.join(ROOT, 'ble.py'), '--discover', String(seconds)],
+      { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+
+    let devices = null;
+    let failure = null;
+    const rl = readline.createInterface({ input: py.stdout });
+
+    rl.on('line', (line) => {
+      let ev;
+      try { ev = JSON.parse(line); } catch (e) { return; }
+      if (ev.t === 'log') { note(`  ${ev.msg}`); return; }
+      if (ev.t === 'discovered') {
+        devices = (ev.devices || []).map((d) => {
+          const identified = ScalesDB.identify(d.name || '', d.services || []);
+          return {
+            address: d.address,
+            name: d.name || null,
+            rssi: typeof d.rssi === 'number' ? d.rssi : null,
+            supported: Boolean(identified && identified.model),
+            model: identified && identified.model ? identified.model : null,
+          };
+        });
+        return;
+      }
+      if (ev.t === 'end' && ev.reason && ev.reason !== 'finished') failure = ev;
+    });
+
+    py.on('close', () => {
+      if (devices) return resolve(devices);
+      if (failure) {
+        const code = failure.reason === 'permission-denied' ? 'PERMISSION_DENIED'
+          : failure.reason === 'bluetooth-unavailable' ? 'BLUETOOTH_UNAVAILABLE'
+            : 'TRANSPORT_FAILED';
+        return reject(Object.assign(new Error(failure.error || failure.reason), { code }));
+      }
+      /*
+       * No list and no stated reason. On macOS this is the Bluetooth
+       * permission being refused to whatever launched us: the OS does not
+       * deny the request, it kills the process, so there is nothing to read.
+       */
+      reject(Object.assign(
+        new Error('the scan ended without a result. On macOS this usually means Bluetooth '
+          + 'permission was refused to the app that launched this service — run it from '
+          + 'Terminal, or grant the app Bluetooth access.'),
+        { code: 'PERMISSION_DENIED' }));
+    });
+
+    py.on('error', (err) => reject(Object.assign(err, { code: 'TRANSPORT_FAILED' })));
+  });
+}
+
 // ---------- one measurement ----------
 function measureOnce(opts) {
   return new Promise((resolve) => {
@@ -934,7 +1000,7 @@ async function serve(a) {
     app: 'bodyscale', version: PKG_VERSION,
     platform: process.platform, node: process.versions.node,
     device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY], remembered: true } : null,
-    commands: ['measure', 'compute', 'cancel', 'status', 'forget', 'shutdown'],
+    commands: ['measure', 'compute', 'scan', 'pair', 'cancel', 'status', 'forget', 'shutdown'],
     errorCodes: Object.keys(ERRORS),
     events: ['hello', 'accepted', 'progress', 'hint', 'measurement',
              'status', 'cancelling', 'forgotten', 'bye', 'error'],
@@ -1173,6 +1239,45 @@ async function serve(a) {
               device: cfg[ADDRESS_KEY] ? { name: cfg.name || null, address: cfg[ADDRESS_KEY] } : null,
               platform: process.platform, version: PKG_VERSION });
         return;
+      /*
+       * Discovery and pairing, for an admin screen.
+       *
+       * A kiosk cannot ask a customer which Bluetooth device to use, so the
+       * scale has to be chosen once by whoever installs it and remembered from
+       * then on. `scan` lists what is advertising, connecting to nothing;
+       * `pair` writes the chosen address to the config the measurement path
+       * already reads.
+       *
+       * These are separate from `measure` on purpose. Measuring resolves on
+       * the first match and connects immediately, which is right when you know
+       * what you are looking for and useless when you are choosing.
+       */
+      case 'scan': {
+        if (running) return fail(id, 'BUSY', 'a measurement is running; cancel it first');
+        const seconds = Math.max(1, Math.min(60, Number(req.seconds) || 8));
+        return void scanForDevices(a, seconds)
+          .then((devices) => out({
+            proto: PROTOCOL_VERSION, type: 'devices', id, seconds,
+            devices,
+            // Which of these look like scales we have a driver for. The host
+            // should still show the rest: an unrecognised name is not a
+            // reason to hide a device from the person installing it.
+            supported: devices.filter((d) => d.supported).map((d) => d.address),
+          }))
+          .catch((err) => fail(id, err.code || 'TRANSPORT_FAILED', err.message));
+      }
+
+      case 'pair': {
+        const address = String(req.address || '').trim();
+        if (!address) return fail(id, 'BAD_REQUEST', 'pair needs an address');
+        cfg[ADDRESS_KEY] = address;
+        if (req.name) cfg.name = String(req.name);
+        writeConfig(cfg);
+        out({ proto: PROTOCOL_VERSION, type: 'paired', id,
+              device: { name: cfg.name || null, address } });
+        return;
+      }
+
       case 'forget':
         delete cfg[ADDRESS_KEY];
         writeConfig(cfg);

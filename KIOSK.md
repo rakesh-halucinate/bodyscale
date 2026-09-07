@@ -32,21 +32,23 @@ sits on its idle screen.
 
 ### Stage 1 — arm the service
 
-At kiosk startup, and again after every completed reading, send one `measure`
+The scale must already be paired; see §2a. At kiosk startup, and again after every completed reading, send one `measure`
 with `withoutProfile: true`. It resolves only when somebody has been measured,
 so it doubles as a standing "watch for a person".
 
 ```json
 { "id": "watch-1", "cmd": "measure", "withoutProfile": true,
-  "scaleProfile": { "sex": "male", "age": 39, "heightCm": 180 },
   "scanTimeoutSec": 90, "timeoutSec": 600, "impedanceWaitSec": 30 }
 ```
+
+No `scaleProfile`. The service supplies its own synthetic placeholder — **male,
+25, 170 cm**, which is nobody — and that is all the scale needs. Send one only
+if you want the scale's own display to be right for the person in front of it;
+see §5.
 
 You receive `accepted`. The app shows **"Touch here to continue"**. If
 `accepted` never arrives, the scale is unreachable and the idle screen should
 say so quietly rather than invite a touch.
-
-`scaleProfile` is a fixed placeholder and can stay hard-coded. See §5.
 
 ### Stage 2 — somebody steps on
 
@@ -129,6 +131,47 @@ was mistyped.
 
 ---
 
+## 2a. Pairing the scale, once, from an admin screen
+
+A kiosk cannot ask a customer which Bluetooth device to use. The scale is
+chosen once by whoever installs it and remembered from then on.
+
+```json
+→ { "id": "s1", "cmd": "scan", "seconds": 8 }
+← { "type": "devices", "devices": [
+      { "address": "BEECC6EC-…", "name": "SSW533", "rssi": -52,
+        "supported": true, "model": "Dr Trust SSW532" },
+      { "address": "D4:43:8A:…", "name": "Mijia Scale S800", "rssi": -74,
+        "supported": false, "model": null } ] }
+
+→ { "id": "p1", "cmd": "pair", "address": "BEECC6EC-…", "name": "SSW533" }
+← { "type": "paired", "device": { "name": "SSW533", "address": "BEECC6EC-…" } }
+```
+
+`scan` connects to nothing and is safe while the kiosk is idle. It is refused
+with `BUSY` if a measurement is running — both want the radio.
+
+**Four things the admin screen should say or do:**
+
+- **Sort by signal.** The list already arrives strongest first. The scale is
+  usually the thing the operator is standing next to.
+- **Show unsupported devices too.** `supported` marks what the database
+  recognises, but a scale advertising under an unfamiliar name is exactly the
+  case somebody is installing. Hiding it makes the screen useless for its one
+  job.
+- **Say that a sleeping scale does not appear.** Its radio sleeps when idle and
+  it advertises in short bursts on waking. "Tap the plate and scan again" saves
+  a support call.
+- **Offer re-pair and forget.** `pair` again replaces the device; `forget`
+  drops it and the next measurement scans by name.
+
+The address is a CoreBluetooth UUID on macOS and a MAC address on Windows, and
+on macOS it is per-machine — pairing does not transfer between Macs. Once
+paired, `hello` reports it at startup as `device.remembered`, and every
+measurement connects straight to it without a name scan.
+
+---
+
 ## 3. Events
 
 Full table in `API.md` §3. The two that exist specifically for this flow:
@@ -199,8 +242,13 @@ told a lie       97.55 kg   604.6 Ω   26.6, 325.8, 333.3, 320.3, 345.5, …
 Identical to the gram, 0.8 % apart on impedance — a tenth of the drift between
 two honest readings hours apart.
 
-So the kiosk needs no personal data before a measurement. Send a fixed,
-well-formed placeholder and collect the real details afterwards.
+So the kiosk needs no personal data before a measurement. Omit `scaleProfile`
+entirely and the service sends its own — `male, 25, 170 cm`, deliberately
+synthetic and deliberately nobody's. Collect the real details afterwards.
+
+An earlier draft of this document used a real person's height and age as the
+example placeholder. That is the kind of value that gets copied into a shipped
+product and then quietly describes every customer who stands on the scale.
 
 **The one reason to send a real profile** is if the person will also read the
 scale's own screen, or if the vendor's phone app is syncing: both compute their

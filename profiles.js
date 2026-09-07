@@ -35,13 +35,10 @@ const REPLAY = argv.includes('--replay')
 const HEIGHT_CM = Number(arg('--height', 180));
 
 /*
- * The identity written to the scale during the handshake.
- *
- * It is not used for any of the maths below. The scale needs a well-formed
- * profile with the impedance bit set before it will run its sweep, and this is
- * that; the six interpretations are applied afterwards to the numbers it sent.
+ * Nothing is written to the scale. The service supplies its own synthetic
+ * placeholder — male, 25, 170 cm, which is nobody — and that is what a kiosk
+ * does too. It reaches none of the maths below.
  */
-const HANDSHAKE = { sex: 'male', age: 39, heightCm: HEIGHT_CM };
 
 const PROFILES = [
   { label: 'male 39   (default)', sex: 'male', age: 39 },
@@ -110,7 +107,6 @@ async function main() {
       timeoutSec: Number(arg('--hold', 180)),
       hintAfterSec: Number(arg('--hint-after', 8)),
       impedanceWaitSec: Number(arg('--impedance-wait', 30)),
-      scaleProfile: HANDSHAKE,
     });
   } catch (err) {
     say(`\n  ${C.red}${err.code}${C.off}  ${err.message}\n`);
@@ -136,8 +132,8 @@ async function main() {
       say(`                  ${C.dim}${seg(m.impedances.slice(5, 10))}${C.off}`);
     }
   }
-  say(`    told the scale ${C.dim}${HANDSHAKE.sex}, ${HANDSHAKE.age}y, `
-    + `${HANDSHAKE.heightCm} cm — for the handshake only${C.off}`);
+  say(`    told the scale ${C.dim}nothing — the service sent its own placeholder,`
+    + ` which reaches none of the figures below${C.off}`);
   rule();
 
   if (!m.impedanceOhm) {

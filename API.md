@@ -359,6 +359,55 @@ simply forgot is the commoner bug. Sending both is a `BAD_REQUEST`.
 One reading can be recomputed as often as you like — to fix a typo in an age,
 or to show the same weight interpreted for two different people.
 
+### `scan` — list nearby devices, for a pairing screen
+
+```json
+{ "id": "s1", "cmd": "scan", "seconds": 8 }
+```
+
+Scans for `seconds` (1–60, default 8) and **connects to nothing**. Safe to run
+from an admin screen while a kiosk is idle. Refused with `BUSY` if a
+measurement is running: both want the radio.
+
+```json
+{ "proto": 1, "type": "devices", "id": "s1", "seconds": 8,
+  "devices": [
+    { "address": "BEECC6EC-…", "name": "SSW533", "rssi": -52,
+      "supported": true, "model": "Dr Trust SSW532" },
+    { "address": "D4:43:8A:…", "name": "Mijia Scale S800", "rssi": -74,
+      "supported": false, "model": null }
+  ],
+  "supported": ["BEECC6EC-…"] }
+```
+
+Strongest signal first, unnamed devices last — what an operator wants is
+usually the thing they are standing next to. `supported` marks the ones the
+scales database recognises, but **show the rest too**: a scale advertising
+under an unfamiliar name is exactly the case somebody is installing.
+
+A scale that is asleep does not advertise and will not appear. Say that on the
+pairing screen — otherwise an operator concludes the hardware is broken. A tap
+on the plate wakes it.
+
+`address` is a CoreBluetooth UUID on macOS and a MAC address on Windows. It is
+per-machine on macOS: pair again on a different Mac.
+
+### `pair` — remember one
+
+```json
+{ "id": "p1", "cmd": "pair", "address": "BEECC6EC-…", "name": "SSW533" }
+```
+
+Writes the address the measurement path already reads, so a paired kiosk never
+scans by name again. `name` is optional and only used for display.
+
+```json
+{ "proto": 1, "type": "paired", "id": "p1",
+  "device": { "name": "SSW533", "address": "BEECC6EC-…" } }
+```
+
+Sending `pair` again replaces the remembered device. `forget` drops it.
+
 ### `forget`
 
 ```json

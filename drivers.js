@@ -72,6 +72,29 @@
   //   three command packets (session ack, user profile, app name "icomon") -> scale starts
   //   measuring. Final data arrives as three 0x23 frames (weight, impedances, end-of-record).
   // =========================================================================
+  /*
+   * The identity handed to the scale when the host has not supplied one.
+   *
+   * A kiosk has no personal details before the payment screen — that is the
+   * whole point of the deferred design — but the scale still needs a
+   * well-formed profile with the impedance bit set before it will run its
+   * sweep. This is that, and nothing else: it never reaches the body
+   * composition maths, which uses the profile the host supplies afterwards.
+   *
+   * Deliberately synthetic and deliberately not anyone's. An earlier version
+   * of the kiosk documentation used a real person's height and age as the
+   * example placeholder, which is the kind of thing that gets copied into a
+   * shipped product and then describes every customer who stands on it.
+   *
+   * Safe to leave wrong. Measured directly: two readings of the same person
+   * back to back, one telling the scale the truth and one telling it a
+   * 70-year-old, 140 cm woman was standing there, returned the same weight to
+   * the gram and impedances 0.8% apart — a tenth of the drift between two
+   * honest readings. What the scale is told changes what IT displays, not what
+   * it measures or sends.
+   */
+  const PLACEHOLDER = { sex: 'male', age: 25, heightCm: 170 };
+
   /* ICMeasureStep, as the SDK names the 0xA2 state byte. */
   const STATE_NAMES = {
     0: 'finished', 1: 'weighing',
@@ -271,9 +294,9 @@
     async writeProfile(ctx, weightKg) {
       const prof = ctx.profile() || {};
       const ts = Math.floor(ctx.now() / 1000);
-      const h = Math.min(220, Math.max(100, Math.round(prof.heightCm || 170)));
-      const age = Math.min(127, Math.max(0, Math.round(prof.age || 30)));
-      const male = String(prof.sex || 'male').toLowerCase() !== 'female';
+      const h = Math.min(220, Math.max(100, Math.round(prof.heightCm || PLACEHOLDER.heightCm)));
+      const age = Math.min(127, Math.max(0, Math.round(prof.age || PLACEHOLDER.age)));
+      const male = String(prof.sex || PLACEHOLDER.sex).toLowerCase() !== 'female';
       const declaredKg = Math.min(300, Math.max(10, weightKg || prof.weightKg || 60));
       const dw = Math.round(declaredKg * 100);
 

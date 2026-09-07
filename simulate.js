@@ -376,7 +376,11 @@ async function main() {
    * the scale's history upload as a measurement. The evidence is above; the
    * blame was not.
    */
-  const HANDSHAKE = { sex: 'male', age: 39, heightCm: 180 };
+  /*
+   * Nothing is sent to the scale. The service supplies its own synthetic
+   * placeholder, which is what a kiosk will do, so this rehearsal exercises
+   * the same path production takes rather than a friendlier one.
+   */
   let who = { sex: 'male', age: 39, heightCm: 180 };   // defaults for the prompts, not the scale
   const WHO_FILE = require('path').join(ROOT, 'logs', 'profile.json');
   try {
@@ -436,7 +440,6 @@ async function main() {
         secondProgramWaitSec: Number(arg('--second-program', 0)),
         // Written to the scale during the handshake, and used for nothing
         // else: the reading stays deferred until details are entered below.
-        scaleProfile: HANDSHAKE,
       });
     } catch (err) {
       clearLive();

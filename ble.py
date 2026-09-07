@@ -115,6 +115,68 @@ async def find_device(name, address, scan_timeout):
             pass
 
 
+async def discover(seconds):
+    """List every BLE device advertising, without connecting to any of them.
+
+    This exists for a pairing screen. `find_device` resolves on the first match
+    and hands the device straight to a connect, which is right for measuring
+    and useless for choosing: an operator setting up a kiosk needs to see what
+    is in the room, with signal strength, and pick one.
+
+    Structured exactly like `find_device` — a future, `wait_for`, and a stop in
+    a finally — because that pattern is proven on this hardware and the obvious
+    alternatives are not. `BleakScanner.discover()` aborts the interpreter on
+    this macOS build (SIGABRT, inside CoreBluetooth), and so does a bare
+    `await asyncio.sleep()` between start and stop. The only difference here is
+    that the future is never resolved, so the wait always reaches its timeout.
+
+    Nothing is connected to and nothing is written. A scale that is asleep does
+    not advertise and will not appear, which is worth saying on a pairing
+    screen rather than leaving an operator to conclude the hardware is broken.
+    """
+    loop = asyncio.get_running_loop()
+    never = loop.create_future()
+    seen = {}
+
+    def on_detect(dev, adv):
+        addr = dev.address or ""
+        if not addr:
+            return
+        name = (dev.name or adv.local_name or "").strip()
+        rssi = getattr(adv, "rssi", None)
+        prev = seen.get(addr)
+        if prev is None:
+            seen[addr] = {"address": addr, "name": name, "rssi": rssi,
+                          "services": [str(u) for u in (adv.service_uuids or [])]}
+            return
+        # Keep the strongest sighting: RSSI swings between bursts, and the best
+        # one is the most useful number to put beside a name.
+        if rssi is not None and (prev["rssi"] is None or rssi > prev["rssi"]):
+            prev["rssi"] = rssi
+        if name and not prev["name"]:
+            prev["name"] = name
+
+    log(f"scanning for {seconds:.0f} s, connecting to nothing")
+    scanner = BleakScanner(detection_callback=on_detect)
+    await scanner.start()
+    try:
+        await asyncio.wait_for(never, timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+    finally:
+        try:
+            await scanner.stop()
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    devices = list(seen.values())
+    # Strongest first, unnamed last: what an operator wants is usually the
+    # thing they are standing next to.
+    devices.sort(key=lambda d: (d["rssi"] is None, -(d["rssi"] if d["rssi"] is not None else 0)))
+    emit(t="discovered", devices=devices, count=len(devices))
+    return 0
+
+
 async def run(args):
     dev = await find_device(args.name, args.address, args.scan_timeout)
     if dev is None:
@@ -320,9 +382,22 @@ def main():
                     help="comma-separated characteristic UUIDs to subscribe to at first; "
                          "empty means every notify characteristic, which is rarely what a "
                          "vendor app does")
+    ap.add_argument("--discover", type=float, default=None, metavar="SECONDS",
+                    help="list every advertising device for this long and exit, "
+                         "connecting to nothing. For a pairing screen.")
     ap.add_argument("--selftest", action="store_true",
                     help="check that this interpreter can import bleak, then exit")
     args = ap.parse_args()
+
+    if args.discover is not None:
+        if BLEAK_IMPORT_ERROR:
+            emit(t="end", reason="error", error=BLEAK_IMPORT_ERROR)
+            sys.exit(1)
+        try:
+            sys.exit(asyncio.run(discover(max(1.0, min(60.0, args.discover)))))
+        except Exception as exc:                                   # noqa: BLE001
+            emit(t="end", reason=classify_failure(exc), error=str(exc))
+            sys.exit(1)
 
     if args.selftest:
         if BLEAK_IMPORT_ERROR:
