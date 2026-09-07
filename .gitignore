@@ -24,4 +24,8 @@ node_modules/
 .DS_Store
 *.log
 logs/
-logs/profile.json
+
+# Raw frame dumps from ./diagnose.command. Useful while debugging one scale on
+# one evening, and meaningless afterwards: they carry device identifiers and a
+# person's weight, and go stale the moment the driver changes.
+frames-*.txt

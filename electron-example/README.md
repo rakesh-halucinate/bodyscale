@@ -12,6 +12,16 @@ A working Electron app that reads the scale. Four files do the whole job.
 The full protocol is documented in [`../API.md`](../API.md). This directory is
 the same thing as running code.
 
+**Building an unattended kiosk?** Read [`../KIOSK.md`](../KIOSK.md) first. The
+shape is different: the service runs ambiently and pushes `occupied` when
+somebody steps on and `measuring` while the scale runs its sweep, rather than
+the app driving a measurement it asked for. The person's own details arrive
+afterwards, at a payment screen, and the reading is held in between.
+
+`bodyscale-client.js` needs no change for that — it re-emits every phase under
+its own name, so `client.on('occupied', …)` and `client.on('measuring', …)`
+work today.
+
 ---
 
 ## Run it now, with no scale
